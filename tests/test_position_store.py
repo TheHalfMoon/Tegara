@@ -38,6 +38,14 @@ class PositionStoreTests(unittest.TestCase):
         if os.name == "posix":
             self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
+    def test_existing_database_permissions_hardened_on_reopen(self):
+        if os.name == "posix":
+            os.chmod(self.path, 0o644)
+            self.assertEqual(self.path.stat().st_mode & 0o777, 0o644)
+            with PositionStore(self.path) as reopened:
+                self.assertEqual(reopened.get("entry-1").open_quantity, 3)
+            self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+
     def test_duplicate_open_denied(self):
         self.assertEqual(self.store.get("entry-1").status, PositionStatus.OPEN)
         with self.assertRaises(Exception):

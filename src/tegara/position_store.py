@@ -90,15 +90,15 @@ class PositionStore:
 
     def __init__(self, path: str | Path = ":memory:") -> None:
         location = str(path)
-        existed = False
         if location != ":memory:":
             p = Path(location)
             p.parent.mkdir(parents=True, exist_ok=True)
-            existed = p.exists()
+            if p.exists():
+                os.chmod(location, 0o600)
         self.db = sqlite3.connect(location, isolation_level=None, timeout=10)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")
-        if location != ":memory:" and not existed:
+        if location != ":memory:":
             os.chmod(location, 0o600)
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS positions (
