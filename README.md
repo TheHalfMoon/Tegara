@@ -34,3 +34,11 @@ From a checkout:
 The arithmetic requires explicit Decimal values and actual per-contract fees supplied by the caller. An assessment of an option quote is an *indication to review a sell-to-close*, not a fill, a broker order, or a guaranteed price.
 
 Planning details: docs/PLAN.md. Architecture: docs/ARCHITECTURE.md. Quality evidence: docs/QUALITY_EVIDENCE.md.
+
+## Offline target calculator and local position journal (G03 prototype)
+
+- python -m tegara target computes an illustrative target option bid from real user-supplied fees, an explicit contract multiplier and tick increment. It makes no network calls.
+- The tegara.position_store.PositionStore maintains a local SQLite journal of manually confirmed fills and a pending review-notification outbox. Merely queuing or delivering a notification does not close a position.
+- Code has no live feed, no Derayah connection, no actual push delivery and no authorization for live orders.
+
+See docs/POSITION_MONITOR.md for scope and limitations.

@@ -83,6 +83,12 @@ class TargetCoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 replace(self.position, quantity=quantity)
 
+    def test_expired_contract_never_issues_exit_alert(self):
+        after_expiry = self.now + timedelta(days=2)
+        x = assess_profit_target(self.position, self.quote, after_expiry,
+                                 timedelta(days=4), D("35"))
+        self.assertEqual(x.status, AlertStatus.SUPPRESSED_EXPIRED)
+
     def test_zero_multiplier_rejected(self):
         with self.assertRaises(ValueError):
             replace(self.contract, multiplier=0)
