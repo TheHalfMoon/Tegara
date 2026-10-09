@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 
 def _money(value: Decimal, label: str) -> Decimal:
@@ -116,6 +117,7 @@ class AlertStatus(str, Enum):
     SUPPRESSED_UNQUALIFIED_FEED = "SUPPRESSED_UNQUALIFIED_FEED"
     SUPPRESSED_STALE_QUOTE = "SUPPRESSED_STALE_QUOTE"
     SUPPRESSED_INSUFFICIENT_SIZE = "SUPPRESSED_INSUFFICIENT_SIZE"
+    SUPPRESSED_EXPIRED = "SUPPRESSED_EXPIRED"
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,10 @@ def assess_profit_target(
     target = minimum_bid_for_net_profit(position, target_net_profit)
     if quote.contract != position.contract:
         return AlertAssessment(AlertStatus.SUPPRESSED_CONTRACT_MISMATCH, target)
+    ny = ZoneInfo("America/New_York")
+    if (now.astimezone(ny).date() > position.contract.expiration
+            or quote.observed_at.astimezone(ny).date() > position.contract.expiration):
+        return AlertAssessment(AlertStatus.SUPPRESSED_EXPIRED, target)
     if quote.feed_type != "EXACT_NBBO":
         return AlertAssessment(AlertStatus.SUPPRESSED_UNQUALIFIED_FEED, target)
     age = now - quote.observed_at
