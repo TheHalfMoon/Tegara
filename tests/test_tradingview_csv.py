@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tegara.tradingview_csv import (
     convert_tradingview, parse_timestamp, write_converted
@@ -109,6 +110,37 @@ class TradingViewCSVTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must not already exist"):
             write_converted(self.dest, rows)
         self.assertEqual(self.dest.read_text(), "sensitive source")
+
+    def test_mid_write_failure_does_not_publish_partial_csv(self):
+        valid = convert_tradingview(
+            self.source, interval_minutes=1, bar_time_is="open"
+        )[0]
+        with self.assertRaisesRegex(ValueError, "fields not in fieldnames"):
+            write_converted(self.dest, [valid, {"unexpected": "invalid"}])
+        self.assertFalse(self.dest.exists())
+        self.assertEqual(
+            sorted(p.name for p in self.dest.parent.iterdir()),
+            [self.source.name],
+        )
+
+    def test_late_destination_claim_never_overwrites_existing_file(self):
+        rows = convert_tradingview(
+            self.source, interval_minutes=1, bar_time_is="open"
+        )
+        actual_link = os.link
+
+        def compete(source, target):
+            self.dest.write_text("other writer's data")
+            return actual_link(source, target)
+
+        with patch("os.link", side_effect=compete):
+            with self.assertRaises(FileExistsError):
+                write_converted(self.dest, rows)
+        self.assertEqual(self.dest.read_text(), "other writer's data")
+        self.assertEqual(
+            sorted(p.name for p in self.dest.parent.iterdir()),
+            sorted([self.source.name, self.dest.name]),
+        )
 
     def test_output_private_permissions(self):
         rows = convert_tradingview(self.source, interval_minutes=1, bar_time_is="open")

@@ -102,13 +102,25 @@ def write_converted(path: str | Path, rows: list[dict[str, str]]) -> None:
     if dst.is_symlink() or dst.exists():
         raise ValueError("destination must not already exist or be symlink")
     dst.parent.mkdir(parents=True, exist_ok=True)
-    # Create new with restrictive POSIX permissions; never overwrite input.
+    # Stage in the destination directory: a write failure must never expose
+    # a plausible-looking partial research dataset under its final name.
     import os
-    fd = os.open(str(dst), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=TARGET_HEADER)
-        writer.writeheader()
-        writer.writerows(rows)
+    import tempfile
+    fd, staged = tempfile.mkstemp(
+        dir=dst.parent, prefix=f".{dst.name}.", suffix=".partial"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=TARGET_HEADER)
+            writer.writeheader()
+            writer.writerows(rows)
+            f.flush()
+            os.fsync(f.fileno())
+        # link() is atomic and fails if another writer or symlink already
+        # claimed the destination. Unlike replace(), it never overwrites.
+        os.link(staged, dst)
+    finally:
+        os.unlink(staged)
 
 
 def main(argv=None) -> int:

@@ -45,8 +45,12 @@ Example (illustrative CSV with verified bar-open timestamp semantics):
       --output /private/chart_normalized.csv \
       --interval-minutes 1 --bar-time-is open
 
-The destination must not already exist; it is created with private POSIX
-file permissions. No private data files belong in the Git repository.
+The destination must not already exist; it is published with private POSIX
+file permissions. The converter first stages a complete, flushed CSV in the
+same directory, then uses an atomic no-overwrite hard link to publish it.
+Malformed rows, failed writes, or concurrent destination creation cannot leave
+an incomplete CSV at the requested final path or overwrite another file.
+No private data files belong in the Git repository.
 
 ## Normalized input format
 
