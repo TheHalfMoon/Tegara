@@ -277,25 +277,41 @@ class PositionStore:
                 AlertStatus.SUPPRESSED_WRONG_TRADING_DATE: MonitorDecision.WRONG_TRADING_DATE,
             }
             if result.status in errors:
-                if result.status is AlertStatus.SUPPRESSED_INSUFFICIENT_SIZE:
-                    # A newer otherwise qualified quote with inadequate Bid
-                    # depth cancels any older unclaimed/claimed sell prompt.
+                # A newer same-contract quote may make a previously pending
+                # target review unsafe even if this replacement quote is not
+                # itself actionable (unqualified feed, degraded depth, stale
+                # transport or failed cutoff metadata). Cancel the old prompt
+                # and re-arm ONLY for a subsequent strictly newer qualified
+                # quote. Never let an old/bad-symbol quote cancel a fresh one.
+                #
+                # We deliberately do not treat a self-declared feed name as
+                # independent real OPRA provenance: live dispatch is elsewhere
+                # and remains disabled until actual source qualification.
+                invalidation_states = {
+                    AlertStatus.SUPPRESSED_INSUFFICIENT_SIZE: "INVALIDATED_LIQUIDITY",
+                    AlertStatus.SUPPRESSED_UNQUALIFIED_FEED: "INVALIDATED_FEED_DEGRADED",
+                    AlertStatus.SUPPRESSED_STALE_QUOTE: "INVALIDATED_FEED_STALE",
+                    AlertStatus.SUPPRESSED_CUTOFF_UNVERIFIED: "INVALIDATED_CUTOFF_UNKNOWN",
+                    AlertStatus.SUPPRESSED_AFTER_CUTOFF: "INVALIDATED_AFTER_CUTOFF",
+                    AlertStatus.SUPPRESSED_EXPIRED: "INVALIDATED_AFTER_CUTOFF",
+                    AlertStatus.SUPPRESSED_WRONG_TRADING_DATE: "INVALIDATED_TRADING_DATE",
+                }
+                if (result.status in invalidation_states and
+                        quote.contract == snap.contract):
                     prior = self.db.execute(
-                        "SELECT last_quote_at FROM monitor WHERE position_id=?", (key,)
+                        "SELECT last_quote_at FROM monitor WHERE position_id=?",
+                        (key,),
                     ).fetchone()
-                    at = stamp(quote.observed_at)
-                    if (quote.contract == snap.contract and
-                            quote.feed_type == "EXACT_NBBO" and
-                            (prior["last_quote_at"] is None or
-                             at > prior["last_quote_at"])):
+                    observed = stamp(quote.observed_at)
+                    if prior["last_quote_at"] is None or observed > prior["last_quote_at"]:
                         self.db.execute(
-                            "UPDATE outbox SET state='INVALIDATED_LIQUIDITY' "
+                            "UPDATE outbox SET state=? "
                             "WHERE position_id=? AND state IN ('PENDING','CLAIMED')",
-                            (key,),
+                            (invalidation_states[result.status], key),
                         )
                         self.db.execute(
                             "UPDATE monitor SET armed=1,last_quote_at=? "
-                            "WHERE position_id=?", (at, key),
+                            "WHERE position_id=?", (observed, key),
                         )
                 return MonitorResult(errors[result.status])
             observed = stamp(quote.observed_at)
