@@ -1,5 +1,4 @@
 """Deterministic API tests; browser e2e is in e2e/ and runs separately."""
-from datetime import date
 import json
 from http.server import ThreadingHTTPServer
 import threading

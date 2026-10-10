@@ -13,6 +13,7 @@ from pathlib import Path
 import sqlite3
 import sys
 
+from ._sqlite_writable import _canonical_path
 from .core import LongOptionPosition, OptionContract, _money
 from .position_store import PositionStore
 
@@ -39,10 +40,11 @@ def journal_path(raw: str, *, creation: bool) -> Path:
     """Prevent accidental commit of personal trades or symlink traversal."""
     if raw == ":memory:":
         raise ValueError("journal requires an actual persistent file")
-    path = Path(raw).expanduser()
+    # Never resolve caller-controlled intermediate symlinks: the guarded
+    # PositionStore opener must see and reject those original components.
+    path = _canonical_path(raw)
     if path.is_symlink():
         raise ValueError("journal symlink refused")
-    path = path.resolve()
     repository = Path(__file__).resolve().parents[2]
     if path == repository or repository in path.parents:
         raise ValueError("journal database must be outside Tegara repository")

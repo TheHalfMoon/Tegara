@@ -166,6 +166,28 @@ class ManualJournalCLITests(unittest.TestCase):
         self.assertIn("symlink", p.stderr)
         self.assertEqual(existing.read_text(), "do not touch")
 
+    def test_intermediate_symlink_is_refused_for_reads_and_writes(self):
+        private = Path(self.tmp.name) / "real-private"
+        private.mkdir(mode=0o700)
+        link = Path(self.tmp.name) / "alias-private"
+        link.symlink_to(private, target_is_directory=True)
+        redirected = link / "ledger.sqlite"
+        created = self.cli(*self.open_args("--record-only"), db=redirected)
+        self.assertEqual(created.returncode, 2, created.stderr)
+        self.assertIn("symlink", created.stderr)
+        self.assertFalse((private / "ledger.sqlite").exists())
+
+        direct = private / "ledger.sqlite"
+        created_direct = self.cli(*self.open_args("--record-only"), db=direct)
+        self.assertEqual(created_direct.returncode, 0, created_direct.stderr)
+        redirected_read = self.cli("show", "--position-id", "p-001",
+                                   db=redirected)
+        self.assertEqual(redirected_read.returncode, 2)
+        self.assertIn("symlink", redirected_read.stderr)
+        self.assertEqual(json.loads(self.cli(
+            "show", "--position-id", "p-001", db=direct
+        ).stdout)["quantity_open"], 3)
+
     def test_private_database_file_permissions(self):
         self.create()
         if os.name == "posix":
