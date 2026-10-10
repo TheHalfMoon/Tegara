@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Tegara | Options Target Lab</title>
+  <link rel="stylesheet" href="/style.css"/>
+  <script defer src="/app.js"></script>
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div class="logo"><span class="mark">T</span><div><strong>TEGARA</strong><small>OPTIONS RESEARCH TERMINAL</small></div></div>
+      <div class="pill"><span class="pulse"></span> LOCAL · RESEARCH ONLY</div>
+    </header>
+    <div class="intro">
+      <div class="eyebrow">0DTE RESEARCH TOOLKIT / 01</div>
+      <h1>Set a target.<br/><span>Know the net.</span></h1>
+      <p>Calculate a hypothetical <b>sell-to-close option Bid target</b> from your own entry price, quantity, and Derayah trading costs. All calculations run on this Mac. No market connection is active.</p>
+    </div>
+    <div class="layout">
+      <section class="panel" aria-labelledby="form-title">
+        <div class="panel-head"><span>01 — POSITION DETAILS</span><span class="muted">No broker connection</span></div>
+        <form id="target-form">
+          <h2 id="form-title">Option position</h2>
+          <div class="cols">
+            <label>Underlying ticker <input name="symbol" value="SPY" maxlength="10" required pattern="[A-Z.0-9]+" autocomplete="off"/></label>
+            <label>Contract type <select name="right"><option value="C">Call (long)</option><option value="P">Put (long)</option></select></label>
+            <label>Strike price <input type="number" name="strike" min="0.01" step="any" value="600" required/></label>
+            <label>Expiration date <input type="date" name="expiration" value="2026-10-09" required/></label>
+            <label>Purchase premium <span class="unit">USD / share</span><input type="number" name="entry_price" min="0" step="any" value="1.20" required/></label>
+            <label>Open contracts <input type="number" name="quantity" min="1" max="100000" step="1" value="1" required/></label>
+            <label>Contract multiplier <input type="number" name="multiplier" min="1" max="100000" step="1" value="100" required/></label>
+          </div>
+          <div class="rule"></div>
+          <h2>Fees & target</h2>
+          <div class="cols">
+            <label>Entry fee <span class="unit">USD / contract</span><input type="number" name="entry_fee_per_contract" min="0" step="any" value="2.29" required/></label>
+            <label>Exit fee <span class="unit">USD / contract</span><input type="number" name="exit_fee_per_contract" min="0" step="any" value="2.29" required/></label>
+            <label>Target kind <select name="target_kind"><option value="NET_RETURN_PERCENT">Net return (%)</option><option value="NET_PROFIT_USD">Net profit (USD)</option></select></label>
+            <label>Target value <input type="number" name="target_value" min="0" step="any" value="30" required/></label>
+            <label>Option price increment <input type="number" name="tick" min="0.000001" step="any" value="0.05" required/></label>
+          </div>
+          <p class="note">Example values are synthetic. Enter your actual broker fees and the contract's valid tick increment before using this research estimate.</p>
+          <button type="submit" id="calculate">CALCULATE TARGET <span aria-hidden="true">↗</span></button>
+        </form>
+      </section>
+      <section class="right" aria-label="Results and system state">
+        <div class="panel result">
+          <div class="panel-head"><span>02 — ESTIMATED EXIT</span><span class="label-dark">NO LIVE DATA</span></div>
+          <div id="empty-result" class="placeholder"><div class="ring">◎</div><h2>Your estimate starts here.</h2><p>Set your position parameters and run the calculation to see an indicative target, inclusive of entered fees.</p></div>
+          <div id="results" hidden>
+            <span class="eyebrow">CANDIDATE OPTION BID</span>
+            <div class="big-price" id="target-bid">—</div>
+            <div class="result-grid">
+              <div><small>Initial debit</small><strong id="initial-debit">—</strong></div>
+              <div><small>Estimated net P&L</small><strong id="net-pnl">—</strong></div>
+              <div><small>Unrounded threshold</small><strong id="raw-bid">—</strong></div>
+              <div><small>Contracts</small><strong id="quantity">—</strong></div>
+            </div>
+            <p class="warning">Research estimate only — not a live quote, executable order, guaranteed fill, or trading recommendation.</p>
+          </div>
+          <p id="error" role="alert" hidden></p>
+        </div>
+        <div class="panel state">
+          <div class="panel-head">03 — SYSTEM STATUS</div>
+          <div class="status-row"><span>Options market feed</span><strong>NOT CONNECTED</strong></div>
+          <div class="status-row"><span>Derayah orders</span><strong>DISABLED</strong></div>
+          <div class="status-row"><span>Kronos AI</span><strong>NOT RUNNING</strong></div>
+          <div class="status-row"><span>Mobile notifications</span><strong>DISABLED</strong></div>
+          <div class="status-row"><span>Calculation</span><strong class="ok">LOCAL</strong></div>
+        </div>
+        <div class="disclosure"><strong>Data integrity first.</strong> A chart price target is not the same as a sellable option Bid. Future Sell-to-Close notifications must use a qualified, fresh option quote and a confirmed open position.</div>
+      </section>
+    </div>
+    <footer><span>TEGARA · RESEARCH PROTOTYPE</span><span>TradingView Premium + Derayah Global workflow · Manual execution only</span></footer>
+  </main>
+</body>
+</html>

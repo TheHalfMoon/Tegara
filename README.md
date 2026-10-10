@@ -42,3 +42,25 @@ Planning details: docs/PLAN.md. Architecture: docs/ARCHITECTURE.md. Quality evid
 - Code has no live feed, no Derayah connection, no actual push delivery and no authorization for live orders.
 
 See docs/POSITION_MONITOR.md for scope and limitations.
+
+
+## Local dashboard preview (UI-P01)
+
+This is an **offline hypothetical target calculator**, not a live options
+monitor or an execution tool. Nothing is sent to Derayah, TradingView or an
+external data API.
+
+Run from this repository:
+
+    PYTHONPATH=src python3 -m tegara.dashboard --port 8765
+
+Open http://127.0.0.1:8765 and supply your position's actual contract
+multiplier, fees, target and valid tick increment. A candidate target Bid is
+not an actual available market price.
+
+To run the free, model-less TesterArmy browser e2e tests:
+
+    npm ci --no-audit --no-fund
+    E2E_TELEMETRY_DISABLED=1 npm run test:e2e -- --workers 1
+
+See docs/LOCAL_DASHBOARD.md for the security and data limitations.
