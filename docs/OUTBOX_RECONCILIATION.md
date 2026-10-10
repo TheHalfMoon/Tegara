@@ -52,10 +52,19 @@ unconfirmed claim. Uncertain sends must never be automatically redelivered.
 
 - The database file must already exist, be regular and not itself a
   symlink. macOS system directory aliases are canonicalized.
-- SQLite uses URI mode=ro and PRAGMA query_only=ON; no ledger writes.
-- Unknown states, missing immutable policy, contradictory ACK status,
-  future-dated claim timestamps and malformed timestamps fail closed.
-- Max 10,000 outbox rows and 128 MiB database; no truncated audit passes.
+- The existing on-disk SQLite file is opened exactly once using atomic
+  O_NOFOLLOW on macOS, its bounded bytes are loaded into an IN-MEMORY
+  SQLite database and query_only is enabled. No ledger file is opened
+  for SQLite writes or silently switched to a symlink during access.
+- Active WAL, SHM and rollback-journal sidecars are refused because
+  an on-disk main-file snapshot might omit committed changes. Audit
+  only a QUIESCENT offline database, not during ongoing writes.
+- Unknown states, missing immutable policy, absent primary/foreign keys,
+  malformed provider ACK timestamps or digests, future-dated claim
+  timestamps and contradictory ACK status fail closed.
+- Max 10,000 outbox rows and 32 MiB on-disk main database; no truncated
+  audit passes. Large databases must be handled by an independently
+  qualified, resource-bounded read-only workflow, not silently truncated.
 - Synthetic tests check DB SHA-256 unchanged, tokens withheld, strict
   nonzero exit and invalidated-but-unacknowledged claims counted.
 

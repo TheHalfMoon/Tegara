@@ -1,15 +1,19 @@
 """Local-only SQLite proof that audit never claims, resends or leaks tokens."""
 from __future__ import annotations
 
+from contextlib import closing
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal as D
 from hashlib import sha256
 import json
+import os
+import sqlite3
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tegara import LongOptionPosition, OptionContract, OptionQuote
 from tegara.outbox_audit import read_outbox_audit
@@ -158,6 +162,62 @@ class ReadOnlyOutboxAuditTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "lacks ACK"):
             self.audit()
+
+    def test_claim_missing_timestamp_fails_closed(self):
+        self.queue()
+        self.store.db.execute(
+            "UPDATE outbox SET state='CLAIMED',claimed_at=NULL"
+        )
+        with self.assertRaisesRegex(ValueError, "missing claim timestamp"):
+            self.audit()
+
+    def test_malformed_ack_fails_closed_even_if_claim_was_invalidated(self):
+        notice = self.queue()
+        self.store.revalidation_candidates(
+            "position-secret", now=self.t,
+            max_quote_age=timedelta(seconds=3), last_trading_at=self.cutoff,
+        )
+        self.store.db.execute(
+            "UPDATE outbox SET state='INVALIDATED_PRICE_REVERSAL'"
+        )
+        self.store.db.execute(
+            "INSERT INTO provider_ack_events VALUES (?,?,?,?)",
+            (notice, "not-a-timestamp", "0" * 64, 1),
+        )
+        with self.assertRaisesRegex(ValueError, "timestamp"):
+            self.audit(seconds=2)
+
+    def test_partial_non_tegara_schema_never_produces_clean_report(self):
+        partial = Path(self.tmp.name) / "partial.sqlite"
+        with closing(sqlite3.connect(partial)) as db:
+            db.execute("CREATE TABLE positions(x)")
+            db.execute("CREATE TABLE outbox("
+                       "id,position_id,state,claimed_at,quote_expires_at,"
+                       "contract_cutoff_at)")
+            db.execute("CREATE TABLE provider_ack_events(notice_id)")
+        with self.assertRaisesRegex(ValueError, "schema"):
+            read_outbox_audit(partial, now=self.t)
+
+    def test_symlink_swap_during_open_is_rejected_atomically(self):
+        other = Path(self.tmp.name) / "original.sqlite"
+        native_open = os.open
+
+        def replace_with_symlink(path, flags):
+            self.path.rename(other)
+            self.path.symlink_to(other)
+            return native_open(path, flags)
+
+        with patch("tegara.outbox_audit.os.open", side_effect=replace_with_symlink):
+            with self.assertRaises(OSError):
+                self.audit()
+        self.assertTrue(other.exists())
+
+    def test_wal_sidecar_requires_offline_quiescent_database(self):
+        sidecar = Path(str(self.path.resolve()) + "-wal")
+        sidecar.write_bytes(b"")
+        with self.assertRaisesRegex(ValueError, "sidecar"):
+            self.audit()
+        sidecar.unlink()
 
     def test_cli_strict_nonzero_unacknowledged_and_no_mutation(self):
         self.queue()
