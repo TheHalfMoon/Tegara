@@ -33,3 +33,16 @@ Most critically: do not train Kronos on a study sample that includes future bars
 5. Reject any strategy showing alpha only under unrealistic fills, missingness assumptions, or data leakage.
 
 The synthetic test suite is an API implementation check, not a performance study.
+
+## DQ-P01 cutoff/data tightening
+
+ReplayRules now accepts last_trading_at, a required timezone-aware explicit
+time on the contract's NY expiration date. Without it, replay returns
+UNQUALIFIED_DATA (no monetary result), even when the caller asserts data
+provenance. The effective exit deadline never extends past last_trading_at.
+Quotes from a different NY expiration session are rejected. This cutoff is
+provided by the caller and remains independently unverified; the tool does
+not infer the correct last trading time for SPY, SPX, XSP, SPCX or other roots.
+
+Use quote-audit to inspect user-provided CSV quality before replay. Neither
+tool certifies licensing, marketability or realized fills.

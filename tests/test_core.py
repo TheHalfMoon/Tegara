@@ -21,7 +21,8 @@ class TargetCoreTests(unittest.TestCase):
 
     def assess(self, quote=None):
         return assess_profit_target(
-            self.position, quote or self.quote, self.now, timedelta(seconds=3), D("35")
+            self.position, quote or self.quote, self.now, timedelta(seconds=3), D("35"),
+            last_trading_at=self.now + timedelta(hours=5)
         )
 
     def test_net_pnl_and_explicit_fees(self):
@@ -86,8 +87,31 @@ class TargetCoreTests(unittest.TestCase):
     def test_expired_contract_never_issues_exit_alert(self):
         after_expiry = self.now + timedelta(days=2)
         x = assess_profit_target(self.position, self.quote, after_expiry,
-                                 timedelta(days=4), D("35"))
+                                 timedelta(days=4), D("35"),
+                                 last_trading_at=self.now + timedelta(hours=5))
         self.assertEqual(x.status, AlertStatus.SUPPRESSED_EXPIRED)
+
+    def test_missing_cutoff_suppresses_alert(self):
+        result = assess_profit_target(self.position, self.quote, self.now,
+                                      timedelta(seconds=3), D("35"))
+        self.assertEqual(result.status, AlertStatus.SUPPRESSED_CUTOFF_UNVERIFIED)
+
+    def test_after_cutoff_suppresses_alert(self):
+        result = assess_profit_target(
+            self.position, self.quote, self.now,
+            timedelta(seconds=3), D("35"),
+            last_trading_at=self.now - timedelta(minutes=1)
+        )
+        self.assertEqual(result.status, AlertStatus.SUPPRESSED_AFTER_CUTOFF)
+
+    def test_pre_expiration_quote_day_is_suppressed(self):
+        previous_day = replace(self.quote,
+                               observed_at=self.quote.observed_at - timedelta(days=1))
+        result = assess_profit_target(
+            self.position, previous_day, self.now, timedelta(days=2), D("35"),
+            last_trading_at=self.now + timedelta(hours=5)
+        )
+        self.assertEqual(result.status, AlertStatus.SUPPRESSED_WRONG_TRADING_DATE)
 
     def test_zero_multiplier_rejected(self):
         with self.assertRaises(ValueError):

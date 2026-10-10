@@ -32,7 +32,8 @@ class PositionStoreTests(unittest.TestCase):
     def check(self, quote, offset=0, target="105"):
         return self.store.on_quote("entry-1", quote,
                                    self.now + timedelta(seconds=offset),
-                                   timedelta(seconds=3), D(target))
+                                   timedelta(seconds=3), D(target),
+                                   last_trading_at=self.now + timedelta(hours=5))
 
     def test_created_db_is_private(self):
         if os.name == "posix":
@@ -180,8 +181,24 @@ class PositionStoreTests(unittest.TestCase):
     def test_expired_contract_no_alert(self):
         after = self.now + timedelta(days=2)
         q = self.quote(offset=2 * 86400)
-        result = self.store.on_quote("entry-1", q, after, timedelta(seconds=3), D("105"))
+        result = self.store.on_quote(
+            "entry-1", q, after, timedelta(seconds=3), D("105"),
+            last_trading_at=self.now + timedelta(hours=5)
+        )
         self.assertEqual(result.decision, MonitorDecision.EXPIRED)
+        self.assertEqual(self.store.pending("entry-1"), [])
+
+    def test_monitor_requires_cutoff_and_abstains_on_after_cutoff(self):
+        missing = self.store.on_quote(
+            "entry-1", self.quote(), self.now, timedelta(seconds=3), D("105")
+        )
+        self.assertEqual(missing.decision, MonitorDecision.CUTOFF_UNVERIFIED)
+        cutoff = self.now - timedelta(minutes=1)
+        expired = self.store.on_quote(
+            "entry-1", self.quote(), self.now, timedelta(seconds=3), D("105"),
+            last_trading_at=cutoff,
+        )
+        self.assertEqual(expired.decision, MonitorDecision.AFTER_CUTOFF)
         self.assertEqual(self.store.pending("entry-1"), [])
 
     def test_unknown_notice_rejected(self):

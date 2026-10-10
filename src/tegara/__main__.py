@@ -33,6 +33,15 @@ def parser() -> argparse.ArgumentParser:
     goals.add_argument("--net-return", help="Net return percentage on initial debit")
     p.add_argument("--tick", required=True,
                    help="Explicit valid option-price increment, e.g. 0.01 or 0.05")
+    q = sub.add_parser("quote-audit", help="Inspect local historical quotes without certifying market data")
+    q.add_argument("--csv", required=True, help="Local quote CSV path (never uploaded)")
+    q.add_argument("--symbol", required=True)
+    q.add_argument("--right", choices=("C", "P"), required=True)
+    q.add_argument("--strike", required=True)
+    q.add_argument("--expiration", required=True)
+    q.add_argument("--multiplier", type=int, default=100)
+    q.add_argument("--quantity", type=int, required=True)
+    q.add_argument("--last-trading-at", help="Optional user-supplied ISO timestamp with timezone")
     return root
 
 
@@ -81,10 +90,29 @@ def calculate_target(args: argparse.Namespace) -> dict[str, str]:
     }
 
 
+def calculate_quote_audit(args: argparse.Namespace) -> dict:
+    from .quote_import import read_option_csv
+
+    contract = OptionContract(
+        args.symbol, args.right, _dec(args.strike),
+        date.fromisoformat(args.expiration), args.multiplier,
+    )
+    cutoff = None
+    if args.last_trading_at:
+        from datetime import datetime
+        cutoff = datetime.fromisoformat(args.last_trading_at)
+    _, report = read_option_csv(
+        args.csv, expected_contract=contract,
+        expected_quantity=args.quantity, last_trading_at=cutoff,
+    )
+    return report.as_dict()
+
+
 def main() -> int:
     args = parser().parse_args()
     try:
-        print(json.dumps(calculate_target(args), indent=2))
+        result = calculate_target(args) if args.command == "target" else calculate_quote_audit(args)
+        print(json.dumps(result, indent=2, sort_keys=True))
         return 0
     except (ValueError, OverflowError) as exc:
         parser().error(str(exc))

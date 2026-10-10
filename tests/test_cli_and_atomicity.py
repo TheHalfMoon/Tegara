@@ -71,7 +71,8 @@ class AtomicLedgerTests(unittest.TestCase):
         def worker(_):
             with PositionStore(self.path) as store:
                 return store.on_quote("p", quote, self.at,
-                                      timedelta(seconds=3), D("105")).decision
+                                      timedelta(seconds=3), D("105"),
+                                      last_trading_at=self.at + timedelta(hours=5)).decision
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(worker, range(2)))
         self.assertEqual(results.count(MonitorDecision.ALERT_QUEUED), 1)

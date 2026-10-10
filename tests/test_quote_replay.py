@@ -20,7 +20,8 @@ class QuoteReplayTests(unittest.TestCase):
             entry_slippage_per_share=D("0"), exit_slippage_per_share=D("0"),
             target_net_profit=D("35"), maximum_net_loss=D("50"),
             deadline=self.at + timedelta(minutes=10),
-            max_quote_gap=timedelta(minutes=5)
+            max_quote_gap=timedelta(minutes=5),
+            last_trading_at=self.at + timedelta(minutes=11)
         )
 
     def tick(self, minutes, bid, ask=None, bid_size=5, ask_size=5, feed="EXACT_NBBO"):
@@ -30,6 +31,30 @@ class QuoteReplayTests(unittest.TestCase):
             self.c, b, a, bid_size,
             self.at + timedelta(minutes=minutes),
             "synthetic_fixture_not_real_market", feed), ask_size)
+
+    def test_missing_last_trading_cutoff_abstains(self):
+        without_cutoff = replace(self.rules, last_trading_at=None)
+        r = replay_long_option([self.tick(0, "1.18", "1.20"),
+                                 self.tick(3, "1.62")],
+                                without_cutoff, provenance_approved=True)
+        self.assertEqual(r.outcome, ReplayOutcome.UNQUALIFIED_DATA)
+        self.assertIsNone(r.simulated_net_pnl)
+
+    def test_invalid_last_trading_cutoff(self):
+        with self.assertRaises(ValueError):
+            replace(self.rules, last_trading_at=datetime(2026, 10, 9, 20, 0))
+        with self.assertRaisesRegex(ValueError, "NY expiry"):
+            replace(self.rules, last_trading_at=self.at + timedelta(days=1))
+
+    def test_quote_after_last_trading_cutoff_not_executed(self):
+        cutoff = self.at + timedelta(minutes=2)
+        rules = replace(self.rules, last_trading_at=cutoff)
+        r = replay_long_option(
+            [self.tick(0, "1.18", "1.20"), self.tick(3, "1.62")],
+            rules, provenance_approved=True
+        )
+        self.assertEqual(r.outcome, ReplayOutcome.NO_EXIT_EVIDENCE)
+        self.assertIsNone(r.simulated_net_pnl)
 
     def test_requires_explicit_provenance_assertion(self):
         r = replay_long_option([self.tick(0, "1.18", "1.20"),
@@ -116,6 +141,15 @@ class QuoteReplayTests(unittest.TestCase):
                 [self.tick(3, "1.18", "1.20"), self.tick(1, "1.62")],
                 self.rules, provenance_approved=True
             )
+
+    def test_replay_rejects_pre_expiration_session_quote(self):
+        quote = self.tick(0, "1.18", "1.20")
+        before = replace(quote, quote=replace(
+            quote.quote, observed_at=self.at - timedelta(days=1)
+        ))
+        with self.assertRaisesRegex(ValueError, "NY expiration"):
+            replay_long_option([before, self.tick(3, "1.62")],
+                               self.rules, provenance_approved=True)
 
     def test_cross_contract_data_rejected(self):
         wrong = replace(self.tick(1, "1.62"),

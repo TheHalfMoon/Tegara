@@ -49,6 +49,9 @@ class MonitorDecision(str, Enum):
     STALE_QUOTE = "STALE_QUOTE"
     INSUFFICIENT_SIZE = "INSUFFICIENT_SIZE"
     EXPIRED = "EXPIRED"
+    CUTOFF_UNVERIFIED = "CUTOFF_UNVERIFIED"
+    AFTER_CUTOFF = "AFTER_CUTOFF"
+    WRONG_TRADING_DATE = "WRONG_TRADING_DATE"
 
 
 @dataclass(frozen=True)
@@ -229,7 +232,8 @@ class PositionStore:
 
     def on_quote(
         self, key: str, quote: OptionQuote, now: datetime,
-        max_age: timedelta, target_net_profit: Decimal
+        max_age: timedelta, target_net_profit: Decimal,
+        last_trading_at: datetime | None = None,
     ) -> MonitorResult:
         """Queue one *review* alert per upward crossing; never submit an order."""
         stamp(now)
@@ -239,13 +243,16 @@ class PositionStore:
             if snap.status is PositionStatus.CLOSED:
                 return MonitorResult(MonitorDecision.CLOSED)
             result = assess_profit_target(snap.remaining(), quote, now,
-                                          max_age, target_net_profit)
+                                          max_age, target_net_profit, last_trading_at)
             errors = {
                 AlertStatus.SUPPRESSED_CONTRACT_MISMATCH: MonitorDecision.CONTRACT_MISMATCH,
                 AlertStatus.SUPPRESSED_UNQUALIFIED_FEED: MonitorDecision.UNQUALIFIED_FEED,
                 AlertStatus.SUPPRESSED_STALE_QUOTE: MonitorDecision.STALE_QUOTE,
                 AlertStatus.SUPPRESSED_INSUFFICIENT_SIZE: MonitorDecision.INSUFFICIENT_SIZE,
                 AlertStatus.SUPPRESSED_EXPIRED: MonitorDecision.EXPIRED,
+                AlertStatus.SUPPRESSED_CUTOFF_UNVERIFIED: MonitorDecision.CUTOFF_UNVERIFIED,
+                AlertStatus.SUPPRESSED_AFTER_CUTOFF: MonitorDecision.AFTER_CUTOFF,
+                AlertStatus.SUPPRESSED_WRONG_TRADING_DATE: MonitorDecision.WRONG_TRADING_DATE,
             }
             if result.status in errors:
                 return MonitorResult(errors[result.status])
