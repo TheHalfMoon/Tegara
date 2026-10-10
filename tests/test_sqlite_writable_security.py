@@ -160,6 +160,48 @@ class SQLiteWritableSecurityTests(unittest.TestCase):
                 PositionStore(self.path)
         self.assert_victim_untouched()
 
+    def test_unrelated_plain_file_remains_byte_and_mode_identical(self):
+        self.parent.mkdir(mode=0o700)
+        contents = b"NOT A SQLITE DATABASE; PRESERVE CONTENT AND MODE"
+        self.path.write_bytes(contents)
+        self.path.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "not a Tegara SQLite journal"):
+            PositionStore(self.path)
+        self.assertEqual(self.path.read_bytes(), contents)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o644)
+        self.assert_victim_untouched()
+
+    def test_unrelated_sqlite_database_is_not_repurposed(self):
+        with self.assertRaisesRegex(ValueError, "not a Tegara journal"):
+            PositionStore(self.victim)
+        self.assert_victim_untouched()
+        with closing(sqlite3.connect(self.victim)) as db:
+            self.assertEqual(
+                db.execute("SELECT name FROM sqlite_master WHERE type='table'"
+                           ).fetchall(),
+                [("unrelated",)],
+            )
+
+    def test_existing_legacy_tegara_columns_migrate_without_replacement(self):
+        with PositionStore(self.path):
+            pass
+        with closing(sqlite3.connect(self.path)) as db:
+            db.execute("ALTER TABLE monitor DROP COLUMN last_target")
+            db.execute("ALTER TABLE outbox DROP COLUMN quote_expires_at")
+            db.commit()
+        old_hash = hashlib.sha256(self.path.read_bytes()).digest()
+        with PositionStore(self.path) as store:
+            self.assertEqual(store.db.execute(
+                "SELECT count(*) FROM positions").fetchone()[0], 0)
+            self.assertIn("last_target", {
+                row["name"] for row in store.db.execute("PRAGMA table_info(monitor)")
+            })
+            self.assertIn("quote_expires_at", {
+                row["name"] for row in store.db.execute("PRAGMA table_info(outbox)")
+            })
+        self.assertNotEqual(hashlib.sha256(self.path.read_bytes()).digest(), old_hash)
+        self.assert_victim_untouched()
+
     def test_memory_database_remains_available(self):
         with PositionStore() as store:
             self.assertEqual(store.db.execute("SELECT 1").fetchone()[0], 1)

@@ -6,6 +6,7 @@ A malicious process running as the same uid or root is outside this boundary.
 """
 from __future__ import annotations
 
+from contextlib import closing
 import os
 from pathlib import Path
 import sqlite3
@@ -59,6 +60,56 @@ def _check_identity(fd: int, parent_fd: int, path: Path) -> None:
         raise ValueError("SQLite database changed during open")
 
 
+_SQLITE_MAGIC = b"SQLite format 3\0"
+_LEGACY_TABLE_COLUMNS = {
+    "positions": {
+        "id", "symbol", "right_type", "strike", "expiry", "multiplier",
+        "entry_price", "initial_qty", "open_qty", "entry_fee", "exit_fee",
+        "opened_at",
+    },
+    "fills": {"position_id", "fill_id", "qty", "price", "exit_fee", "at", "net"},
+    "monitor": {"position_id", "armed", "last_quote_at"},
+    "outbox": {
+        "id", "position_id", "quote_at", "bid", "net", "target", "state",
+        "created_at",
+    },
+}
+
+
+def _verify_existing_ledger(fd: int, parent_fd: int, path: Path) -> None:
+    """Refuse unrelated disk files before chmod or writable SQLite initialization.
+
+    Existing old-format Tegara databases need the stable core tables; later
+    columns are intentionally optional so the normal migrations still work.
+    Read-only immutable preflight must not create SQLite journal sidecars.
+    """
+    size = os.fstat(fd).st_size
+    if size == 0:
+        return  # Existing empty files retain their prior initialization support.
+    if size < 100 or os.pread(fd, 16, 0) != _SQLITE_MAGIC:
+        raise ValueError("existing file is not a Tegara SQLite journal")
+    _check_identity(fd, parent_fd, path)
+    uri = "file:" + quote(str(path), safe="/") + "?mode=ro&immutable=1"
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=10)) as preview:
+            tables = {
+                row[0] for row in preview.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if not _LEGACY_TABLE_COLUMNS.keys() <= tables:
+                raise ValueError("existing SQLite database is not a Tegara journal")
+            for table, required in _LEGACY_TABLE_COLUMNS.items():
+                columns = {
+                    row[1] for row in preview.execute(f"PRAGMA table_info({table})")
+                }
+                if not required <= columns:
+                    raise ValueError("existing SQLite schema is not a Tegara journal")
+    except sqlite3.Error as exc:
+        raise ValueError("existing SQLite database cannot be safely qualified") from exc
+    _check_identity(fd, parent_fd, path)
+
+
 def open_private_sqlite(location: str) -> sqlite3.Connection:
     """Open and revalidate a private SQLite file before any schema writes."""
     if not all(hasattr(os, key) for key in ("O_NOFOLLOW", "O_DIRECTORY")):
@@ -89,15 +140,19 @@ def open_private_sqlite(location: str) -> sqlite3.Connection:
             os.close(parent_fd)
             parent_fd = child_fd
         _trusted_directory(parent_fd, final=True)
+        existing = False
         try:
             file_fd = os.open(path.name, file_flags | os.O_CREAT | os.O_EXCL,
                               0o600, dir_fd=parent_fd)
         except FileExistsError:
+            existing = True
             try:
                 file_fd = os.open(path.name, file_flags, dir_fd=parent_fd)
             except OSError as exc:
                 raise ValueError("SQLite database symlinks are refused") from exc
         _check_identity(file_fd, parent_fd, path)
+        if existing:
+            _verify_existing_ledger(file_fd, parent_fd, path)
         os.fchmod(file_fd, 0o600)
         _check_identity(file_fd, parent_fd, path)
         # mode=rw means SQLite cannot silently create a different file.
