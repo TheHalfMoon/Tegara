@@ -118,6 +118,9 @@ class AlertStatus(str, Enum):
     SUPPRESSED_STALE_QUOTE = "SUPPRESSED_STALE_QUOTE"
     SUPPRESSED_INSUFFICIENT_SIZE = "SUPPRESSED_INSUFFICIENT_SIZE"
     SUPPRESSED_EXPIRED = "SUPPRESSED_EXPIRED"
+    SUPPRESSED_CUTOFF_UNVERIFIED = "SUPPRESSED_CUTOFF_UNVERIFIED"
+    SUPPRESSED_AFTER_CUTOFF = "SUPPRESSED_AFTER_CUTOFF"
+    SUPPRESSED_WRONG_TRADING_DATE = "SUPPRESSED_WRONG_TRADING_DATE"
 
 
 @dataclass(frozen=True)
@@ -133,6 +136,7 @@ def assess_profit_target(
     now: datetime,
     max_quote_age: timedelta,
     target_net_profit: Decimal,
+    last_trading_at: datetime | None = None,
 ) -> AlertAssessment:
     """Only classify a validated quote; never submit a trade or send a push."""
     if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
@@ -146,6 +150,17 @@ def assess_profit_target(
     if (now.astimezone(ny).date() > position.contract.expiration
             or quote.observed_at.astimezone(ny).date() > position.contract.expiration):
         return AlertAssessment(AlertStatus.SUPPRESSED_EXPIRED, target)
+    if last_trading_at is None:
+        return AlertAssessment(AlertStatus.SUPPRESSED_CUTOFF_UNVERIFIED, target)
+    if (not isinstance(last_trading_at, datetime) or
+            last_trading_at.tzinfo is None or
+            last_trading_at.utcoffset() is None or
+            last_trading_at.astimezone(ny).date() != position.contract.expiration):
+        raise ValueError("last_trading_at must be timezone-aware and on NY expiration date")
+    if (now >= last_trading_at or quote.observed_at >= last_trading_at):
+        return AlertAssessment(AlertStatus.SUPPRESSED_AFTER_CUTOFF, target)
+    if quote.observed_at.astimezone(ny).date() != position.contract.expiration:
+        return AlertAssessment(AlertStatus.SUPPRESSED_WRONG_TRADING_DATE, target)
     if quote.feed_type != "EXACT_NBBO":
         return AlertAssessment(AlertStatus.SUPPRESSED_UNQUALIFIED_FEED, target)
     age = now - quote.observed_at

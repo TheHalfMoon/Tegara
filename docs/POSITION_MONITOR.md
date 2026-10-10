@@ -53,3 +53,13 @@ TesterArmy browser e2e tests must be added at the UI milestone. Neither Jev nor 
 - Run meaningful independent Alibaba OpenCodeReview on the exact diff.
 - Add feed adapter provenance, explicit time-of-last-trade policy and notification delivery under separate milestones.
 - Document realistic UI flow and run TesterArmy e2e when implemented.
+
+## G03 successor tightening (DQ-P01)
+
+An explicit timezone-aware contract-specific last_trading_at is now required
+for producing a potential target-hit result. If absent, the outcome is
+CUTOFF_UNVERIFIED and **no sell alert is queued**. If the quote or assessment
+time is at/after that cutoff, AFTER_CUTOFF suppresses the alert. Expiration
+date alone is insufficient because different option products and shortened
+sessions can have different last trading times. A supplied cutoff remains
+unverified metadata, not proof of broker/venue acceptance.

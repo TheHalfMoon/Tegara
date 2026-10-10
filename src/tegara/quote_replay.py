@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import Enum
+from zoneinfo import ZoneInfo
 
 from .core import (
     LongOptionPosition, OptionContract, OptionQuote, calculate_net_exit_pnl
@@ -46,6 +47,7 @@ class ReplayRules:
     maximum_net_loss: Decimal
     deadline: datetime
     max_quote_gap: timedelta
+    last_trading_at: datetime | None = None  # externally supplied; never inferred
 
     def __post_init__(self) -> None:
         if type(self.quantity) is not int or self.quantity <= 0:
@@ -62,6 +64,14 @@ class ReplayRules:
             raise ValueError("deadline must be timezone aware")
         if self.max_quote_gap <= timedelta(0):
             raise ValueError("max_quote_gap must be positive")
+        if self.last_trading_at is not None:
+            if (self.last_trading_at.tzinfo is None or
+                    self.last_trading_at.utcoffset() is None):
+                raise ValueError("last_trading_at must be timezone aware")
+            if self.last_trading_at.astimezone(
+                ZoneInfo("America/New_York")
+            ).date() != self.contract.expiration:
+                raise ValueError("last trading cutoff must match NY expiry date")
 
 
 @dataclass(frozen=True)
@@ -87,8 +97,12 @@ def replay_long_option(
     asserts data provenance approval; that assertion is not independently
     verified here. The result always remains a hypothetical simulation.
     """
-    if provenance_approved is not True:
-        return ReplayResult(ReplayOutcome.UNQUALIFIED_DATA)
+    if provenance_approved is not True or rules.last_trading_at is None:
+        return ReplayResult(
+            ReplayOutcome.UNQUALIFIED_DATA,
+            note="Licensed source and contract-specific last trading cutoff are unverified",
+        )
+    effective_deadline = min(rules.deadline, rules.last_trading_at)
     if not ticks:
         return ReplayResult(ReplayOutcome.NO_ENTRY_LIQUIDITY)
     previous: datetime | None = None
@@ -96,6 +110,10 @@ def replay_long_option(
         quote = tick.quote
         if quote.contract != rules.contract:
             raise ValueError("mixed contract identities in replay")
+        if quote.observed_at.astimezone(
+            ZoneInfo("America/New_York")
+        ).date() != rules.contract.expiration:
+            raise ValueError("replay quote must belong to NY expiration date")
         if quote.feed_type != "EXACT_NBBO":
             return ReplayResult(ReplayOutcome.UNQUALIFIED_DATA)
         if previous is not None and quote.observed_at <= previous:
@@ -103,7 +121,7 @@ def replay_long_option(
         previous = quote.observed_at
 
     first = ticks[0]
-    if first.quote.observed_at >= rules.deadline:
+    if first.quote.observed_at >= effective_deadline:
         return ReplayResult(ReplayOutcome.NO_ENTRY_LIQUIDITY)
     if first.ask_size < rules.quantity or first.quote.ask <= 0:
         return ReplayResult(ReplayOutcome.NO_ENTRY_LIQUIDITY)
@@ -124,7 +142,7 @@ def replay_long_option(
                 note="Unpriced exposure across a quote-data gap; no profit claim"
             )
         previous_at = q.observed_at
-        if q.observed_at > rules.deadline:
+        if q.observed_at > effective_deadline:
             break
         if q.bid_size < rules.quantity or q.bid <= rules.exit_slippage_per_share:
             continue
@@ -140,7 +158,7 @@ def replay_long_option(
 
     if last_eligible_exit is not None:
         last = last_eligible_exit.quote
-        if rules.deadline - last.observed_at <= rules.max_quote_gap:
+        if effective_deadline - last.observed_at <= rules.max_quote_gap:
             exit_price = last.bid - rules.exit_slippage_per_share
             pnl = calculate_net_exit_pnl(position, exit_price)
             return ReplayResult(ReplayOutcome.TIME_EXIT, first.quote.observed_at,

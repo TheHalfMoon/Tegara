@@ -86,3 +86,18 @@ target, stop, time-exit, insufficient-liquidity and missing-quote states.
 artificial quotes to verify code behavior, not profitable trading results.
 The caller must independently verify historical quote provenance and rights
 before making any financial evaluation. See docs/QUOTE_REPLAY.md.
+
+## Historical quote-quality audit (DQ-P01)
+
+Tegara now has an offline single-contract CSV validator. Run a local quote
+quality report without network or trading activity:
+
+    PYTHONPATH=src python3 -m tegara quote-audit --csv /path/to/quotes.csv \
+      --symbol SPY --right C --strike 600 --expiration 2026-10-09 \
+      --multiplier 100 --quantity 1 \
+      --last-trading-at 2026-10-09T20:00:00+00:00
+
+The last trading cutoff above is ILLUSTRATIVE and must be independently verified
+per contract and venue. The resulting report ALWAYS labels licensing and OPRA
+provenance as NOT_INDEPENDENTLY_VERIFIED and live_eligible=false. See
+docs/QUOTE_DATA_QUALITY.md. No quote feed or broker access is included.
