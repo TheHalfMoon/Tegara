@@ -148,6 +148,51 @@ class TradingViewCSVTests(unittest.TestCase):
         if os.name == "posix":
             self.assertEqual(self.dest.stat().st_mode & 0o777, 0o600)
 
+    def test_checked_source_cannot_be_reopened_as_different_csv(self):
+        original = self.source.read_bytes()
+        alternate = Path(self.tmp.name) / "alternate-source.csv"
+        # Use a separately constructed valid alternate, not malformed OHLC.
+        alternate.write_text(
+            "time,open,high,low,close,Volume\n"
+            "1791552600,200,202,199,200.5,2400\n"
+            "1791552660,200.5,203,200,201,1800\n"
+        )
+        self.assertNotEqual(original, alternate.read_bytes())
+        old_open = Path.open
+        switched = []
+
+        def swap_before_second_path_open(path, *args, **kwargs):
+            if path == self.source and kwargs.get("encoding") == "utf-8-sig":
+                self.source.unlink()
+                self.source.symlink_to(alternate)
+                switched.append(True)
+            return old_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", swap_before_second_path_open):
+            rows = convert_tradingview(
+                self.source, interval_minutes=1, bar_time_is="open"
+            )
+        self.assertEqual(rows[0]["close"], "100.5")
+        self.assertFalse(switched, "CSV importer must not reopen checked path")
+
+    def test_source_symlink_swap_at_descriptor_open_is_rejected(self):
+        alternate = Path(self.tmp.name) / "other.csv"
+        alternate.write_bytes(self.source.read_bytes())
+        original_open = os.open
+
+        def switch_to_link(path, flags, *args, **kwargs):
+            if Path(path) == self.source:
+                self.source.unlink()
+                self.source.symlink_to(alternate)
+            return original_open(path, flags, *args, **kwargs)
+
+        with patch("tegara.tradingview_csv.os.open", side_effect=switch_to_link):
+            with self.assertRaises(OSError):
+                convert_tradingview(
+                    self.source, interval_minutes=1, bar_time_is="open"
+                )
+        self.assertTrue(alternate.is_file())
+
     def test_symlink_input_rejected(self):
         link = Path(self.tmp.name) / "link.csv"
         link.symlink_to(self.source)
