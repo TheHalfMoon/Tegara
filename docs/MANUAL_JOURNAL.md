@@ -51,6 +51,9 @@ No credentials or brokerage account numbers are needed or stored. Do not store s
 ## Privacy and correctness
 
 - Owner-only POSIX file mode (0600) for the local database.
+- Path components are traversed with directory descriptors and O_NOFOLLOW. Disk databases require owner/root-owned ancestors, an owner-only (0700) immediate parent and a user-owned regular single-link database file. Root-owned sticky system temporary parents are permitted only above a private subtree. Other writable parent directories and untrusted symlink components fail closed. Only root-owned macOS /tmp and /var system aliases are normalized.
+- The file is created with O_EXCL or opened with O_NOFOLLOW, permission-hardened with fchmod on that descriptor, and identity-checked before and after the SQLite open. SQLite uses mode=rw so it cannot create another pathname during connect. The protected parent also contains SQLite journal/sidecar files. Existing SQLite schema migrations and :memory: remain supported.
+- This protects against other unprivileged users modifying a journal pathname; it does NOT isolate against a malicious process with the same uid or root. The standard Python SQLite connection cannot bind to the pre-opened descriptor, so no complete same-uid pathname-race guarantee is claimed.
 - Direct database symlinks are rejected. Journal paths inside Tegara's Git checkout are disallowed to prevent accidental commits.
 - A malformed opening command does not create an empty journal file.
 - SQLite is NOT encrypted. Use an encrypted personal directory and appropriate backups.

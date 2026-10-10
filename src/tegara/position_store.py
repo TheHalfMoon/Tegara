@@ -12,11 +12,11 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-import os
 import sqlite3
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from ._sqlite_writable import open_private_sqlite
 from .core import (
     AlertStatus, LongOptionPosition, OptionContract, OptionQuote,
     _money, assess_profit_target,
@@ -95,22 +95,12 @@ class PositionStore:
 
     def __init__(self, path: str | Path = ":memory:") -> None:
         location = str(path)
-        if location != ":memory:":
-            p = Path(location)
-            if p.is_symlink():
-                raise ValueError("SQLite position database symlinks are refused")
-            p.parent.mkdir(parents=True, exist_ok=True)
-            if p.is_symlink():
-                raise ValueError("SQLite position database symlinks are refused")
-            if p.exists() and not p.is_file():
-                raise ValueError("SQLite position database must be a regular file")
-            if p.exists():
-                os.chmod(location, 0o600)
-        self.db = sqlite3.connect(location, isolation_level=None, timeout=10)
+        if location == ":memory:":
+            self.db = sqlite3.connect(location, isolation_level=None, timeout=10)
+        else:
+            self.db = open_private_sqlite(location)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")
-        if location != ":memory:":
-            os.chmod(location, 0o600)
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS positions (
               id TEXT PRIMARY KEY, symbol TEXT NOT NULL, right_type TEXT NOT NULL,
