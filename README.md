@@ -75,3 +75,14 @@ Sell-to-Close contract signal. The strategy's financial performance is ONLY
 the underlying proxy, not option P&L.
 
 See docs/TRADINGVIEW_BASELINE.md for manual compile/verification steps.
+
+## Offline options quote replay (QBT-P01)
+
+Python replay module tegara.quote_replay models entry at an option Ask and exit
+at its Bid under user-supplied fees and slippage. It includes deterministic
+target, stop, time-exit, insufficient-liquidity and missing-quote states.
+
+**There is no historical options data bundled with Tegara.** All tests use
+artificial quotes to verify code behavior, not profitable trading results.
+The caller must independently verify historical quote provenance and rights
+before making any financial evaluation. See docs/QUOTE_REPLAY.md.
