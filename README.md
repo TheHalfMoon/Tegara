@@ -173,3 +173,13 @@ broker-entitlement verification table currently lists Derayah for TADAWUL,
 not OPRA. The optional Cboe quote-interval product is a licensed market
 data purchase, not a free live price stream. Do not buy any additional
 subscription or enable execution without a separate explicit authorization.
+
+## Quote-feed degradation safety (FD-P01)
+
+Newer ineligible quotes for the correct contract now invalidate any old
+PENDING/CLAIMED target alerts when the feed is indicative, too delayed,
+insufficiently liquid, past the cutoff or cannot provide a valid cutoff.
+The position then requires a strictly newer qualified quote before queuing a
+new review alert. A wrong-contract or older quote cannot cancel a newer
+one. This is still a local synthetic research ledger without real OPRA proof.
+See docs/FEED_DEGRADATION_SAFETY.md.

@@ -70,13 +70,129 @@ class PositionStoreTests(unittest.TestCase):
                          MonitorDecision.ALREADY_NOTIFIED)
         self.assertEqual(len(self.store.pending("entry-1")), 1)
 
-    def test_untrusted_quote_does_not_rearm(self):
-        self.check(self.quote())
+    def test_degraded_feed_cancels_pending_and_requires_fresh_revalidation(self):
+        original = self.check(self.quote())
         untrusted = self.quote(bid="1.20", offset=1, feed="INDICATIVE")
         self.assertEqual(self.check(untrusted, offset=1).decision,
                          MonitorDecision.UNQUALIFIED_FEED)
+        self.assertEqual(self.store.pending("entry-1"), [])
+        self.assertEqual(
+            self.store.db.execute(
+                "SELECT state FROM outbox WHERE id=?", (original.notification_id,)
+            ).fetchone()["state"], "INVALIDATED_FEED_DEGRADED"
+        )
+        # An eligible quote at the same time as the invalid indicative
+        # observation is valid because the invalid observation cannot claim
+        # ownership of the accepted-quote watermark.
+        self.assertEqual(self.check(self.quote(offset=1), offset=1).decision,
+                         MonitorDecision.ALERT_QUEUED)
         self.assertEqual(self.check(self.quote(offset=2), offset=2).decision,
                          MonitorDecision.ALREADY_NOTIFIED)
+
+    def test_degraded_feed_cancels_already_claimed_notice(self):
+        a = self.check(self.quote())
+        claim = self.claim()
+        bad = self.quote(bid="1.21", offset=1, feed="INDICATIVE")
+        self.assertEqual(self.check(bad, offset=1).decision,
+                         MonitorDecision.UNQUALIFIED_FEED)
+        self.assertEqual(self.store.pending("entry-1"), [])
+        self.assertFalse(self.store.record_provider_acceptance(
+            a.notification_id, claim_token=claim["claim_token"],
+            accepted_at=self.now + timedelta(seconds=1),
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.now + timedelta(hours=5),
+            provider_accepted=True, provider_receipt_id="delayed-fake-ack",
+        ))
+        self.assertEqual(
+            self.store.db.execute(
+                "SELECT state FROM outbox WHERE id=?", (a.notification_id,)
+            ).fetchone()["state"], "INVALIDATED_FEED_DEGRADED"
+        )
+
+    def test_older_bad_feed_cannot_cancel_newer_alert(self):
+        a = self.check(self.quote(offset=1), offset=1)
+        self.assertEqual(a.decision, MonitorDecision.ALERT_QUEUED)
+        untrusted_old = self.quote(bid="1.20", offset=0, feed="INDICATIVE")
+        self.assertEqual(self.check(untrusted_old, offset=1).decision,
+                         MonitorDecision.UNQUALIFIED_FEED)
+        self.assertEqual(
+            [r["id"] for r in self.store.pending("entry-1")],
+            [a.notification_id],
+        )
+
+    def test_wrong_contract_quote_does_not_cancel_original_notice(self):
+        a = self.check(self.quote())
+        bad = self.quote(offset=1, contract=replace(self.contract, right="P"))
+        self.assertEqual(self.check(bad, offset=1).decision,
+                         MonitorDecision.CONTRACT_MISMATCH)
+        self.assertEqual(
+            [r["id"] for r in self.store.pending("entry-1")],
+            [a.notification_id],
+        )
+
+    def test_bad_feed_future_timestamp_cannot_poison_quote_watermark(self):
+        prior = self.check(self.quote())
+        bogus_future = self.quote(
+            offset=3600, bid="99", feed="INDICATIVE"
+        )
+        self.assertEqual(
+            self.check(bogus_future, offset=1).decision,
+            MonitorDecision.UNQUALIFIED_FEED,
+        )
+        self.assertEqual(self.store.pending("entry-1"), [])
+        # Last genuinely accepted market observation was T0. The fake
+        # future timestamp must NOT block T0+2s real eligible recovery.
+        state = self.store.db.execute(
+            "SELECT last_quote_at FROM monitor WHERE position_id='entry-1'"
+        ).fetchone()
+        self.assertEqual(state["last_quote_at"], self.now.isoformat(
+            timespec="microseconds"
+        ))
+        recovered = self.check(self.quote(offset=2), offset=2)
+        self.assertEqual(recovered.decision, MonitorDecision.ALERT_QUEUED)
+        self.assertNotEqual(recovered.notification_id, prior.notification_id)
+
+    def test_unknown_cutoff_future_quote_does_not_poison_watermark(self):
+        self.check(self.quote())
+        bad = self.quote(offset=3600)
+        self.assertEqual(
+            self.store.on_quote(
+                "entry-1", bad, self.now + timedelta(seconds=1),
+                timedelta(seconds=3), D("105"), last_trading_at=None
+            ).decision,
+            MonitorDecision.CUTOFF_UNVERIFIED,
+        )
+        self.assertEqual(
+            self.check(self.quote(offset=2), offset=2).decision,
+            MonitorDecision.ALERT_QUEUED
+        )
+
+    def test_newer_transport_stale_quote_invalidates_previous_alert(self):
+        a = self.check(self.quote())
+        bad = self.quote(offset=1)
+        self.assertEqual(self.check(bad, offset=10).decision,
+                         MonitorDecision.STALE_QUOTE)
+        self.assertEqual(self.store.pending("entry-1"), [])
+        self.assertEqual(
+            self.store.db.execute(
+                "SELECT state FROM outbox WHERE id=?", (a.notification_id,)
+            ).fetchone()["state"], "INVALIDATED_FEED_STALE"
+        )
+        self.assertEqual(self.check(self.quote(offset=2), offset=2).decision,
+                         MonitorDecision.ALERT_QUEUED)
+
+    def test_newer_unknown_cutoff_disarms_existing_pending_alert(self):
+        a = self.check(self.quote())
+        self.assertEqual(self.store.on_quote(
+            "entry-1", self.quote(offset=1), self.now + timedelta(seconds=1),
+            timedelta(seconds=3), D("105"), last_trading_at=None,
+        ).decision, MonitorDecision.CUTOFF_UNVERIFIED)
+        self.assertEqual(self.store.pending("entry-1"), [])
+        self.assertEqual(
+            self.store.db.execute(
+                "SELECT state FROM outbox WHERE id=?", (a.notification_id,)
+            ).fetchone()["state"], "INVALIDATED_CUTOFF_UNKNOWN"
+        )
 
     def test_valid_dip_rearms(self):
         self.check(self.quote())
