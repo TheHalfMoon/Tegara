@@ -36,12 +36,14 @@ last-trading-at, quotes after it are invalid.
 
 Files must be ordinary local files, not symlinks. Inputs are limited to
 48MiB and 60,000 observations per scan. Data files must never enter Git.
-The importer opens the checked leaf with O_NOFOLLOW and deliberately fails
-closed when the platform cannot provide that atomic no-follow flag; it does
-not silently substitute an ordinary path-following read. On supported
-platforms, swapping the final CSV name to a symlink immediately before
-open is refused. This does not attest data source licensing or protect
-against malicious processes altering other path components under the same user.
+The importer walks all directory components through pinned, descriptor-
+relative O_DIRECTORY/O_NOFOLLOW opens, then opens the CSV leaf with
+O_NOFOLLOW. Missing atomic no-follow support fails closed instead of
+falling back to a pathname-following read. Only macOS's fixed /var and
+/tmp aliases to /private are normalized. Tests refuse parent-directory
+symlinks and last-moment symlink substitution. The snapshot remains
+research-only and cannot attest licensed market-data provenance or
+prevent malicious modification by the same user of an already-open file.
 
 ## Report fields
 

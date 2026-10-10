@@ -224,6 +224,56 @@ class OfflineQuoteCSVTests(unittest.TestCase):
             read_option_csv(link, expected_contract=self.contract,
                             expected_quantity=1)
 
+    def test_parent_directory_symlink_is_rejected(self):
+        self.write([self.row()])
+        alias = Path(self.temp.name) / "parent_alias"
+        alias.symlink_to(Path(self.temp.name), target_is_directory=True)
+        original = self.path.read_bytes()
+        with self.assertRaises(OSError):
+            read_option_csv(
+                alias / self.path.name,
+                expected_contract=self.contract, expected_quantity=2,
+            )
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_parent_directory_swap_during_open_is_rejected(self):
+        self.write([self.row()])
+        root = Path(self.temp.name)
+        holder = root / "active_parent"
+        holder.mkdir()
+        (holder / "quotes.csv").write_bytes(self.path.read_bytes())
+        decoy = root / "decoy"
+        decoy.mkdir()
+        decoy_csv = decoy / "quotes.csv"
+        decoy_csv.write_bytes(self.path.read_bytes().replace(b"1.20", b"1.22"))
+        original_decoy = decoy_csv.read_bytes()
+        real_open = os.open
+        replaced = []
+
+        def swap_before_component_open(component, flags, *args, **kwargs):
+            if component == holder.name and not replaced:
+                holder.rename(root / "pinned_original")
+                holder.symlink_to(decoy, target_is_directory=True)
+                replaced.append(True)
+            return real_open(component, flags, *args, **kwargs)
+
+        with patch("tegara.quote_import.os.open",
+                   side_effect=swap_before_component_open):
+            with self.assertRaises(OSError):
+                read_option_csv(
+                    holder / "quotes.csv",
+                    expected_contract=self.contract, expected_quantity=2,
+                )
+        self.assertTrue(replaced)
+        self.assertEqual(decoy_csv.read_bytes(), original_decoy)
+
+    def test_parent_path_dotdot_components_rejected(self):
+        self.write([self.row()])
+        suspicious = self.path.parent / ".." / self.path.parent.name / self.path.name
+        with self.assertRaisesRegex(ValueError, "parent components"):
+            read_option_csv(suspicious, expected_contract=self.contract,
+                            expected_quantity=2)
+
     def test_missing_atomic_nofollow_support_fails_closed(self):
         self.write([self.row()])
         # Simulate a platform exposing no usable O_NOFOLLOW flag. The
@@ -240,7 +290,7 @@ class OfflineQuoteCSVTests(unittest.TestCase):
         original_open = os.open
 
         def insert_symlink_at_open(path, flags, *args, **kwargs):
-            if Path(path) == self.path:
+            if path == self.path.name and "dir_fd" in kwargs:
                 self.path.unlink()
                 self.path.symlink_to(alternate)
             return original_open(path, flags, *args, **kwargs)
