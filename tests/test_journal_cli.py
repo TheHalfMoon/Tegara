@@ -139,6 +139,16 @@ class ManualJournalCLITests(unittest.TestCase):
                 self.assertEqual(self.cli(*args).returncode, 2)
         self.assertFalse(self.db.exists())
 
+    def test_extreme_finite_opening_amount_does_not_create_db(self):
+        for value in ("1e999999999", "1e-999999999", "0e999999999"):
+            with self.subTest(value=value):
+                args = list(self.open_args("--record-only"))
+                args[args.index("--entry") + 1] = value
+                r = self.cli(*args)
+                self.assertEqual(r.returncode, 2)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse(self.db.exists())
+
     def test_database_outside_repo_required(self):
         inside = self.root / "test-journal-do-not-create.sqlite"
         p = self.cli(*self.open_args("--record-only"), db=inside)

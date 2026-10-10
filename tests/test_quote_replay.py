@@ -56,6 +56,46 @@ class QuoteReplayTests(unittest.TestCase):
         self.assertEqual(r.outcome, ReplayOutcome.NO_EXIT_EVIDENCE)
         self.assertIsNone(r.simulated_net_pnl)
 
+    def test_exact_cutoff_cannot_trigger_target_or_stop(self):
+        cutoff = self.at + timedelta(minutes=3)
+        rules = replace(self.rules, last_trading_at=cutoff)
+        for bid in ("1.62", "0.60"):
+            with self.subTest(bid=bid):
+                r = replay_long_option(
+                    [self.tick(0, "1.18", "1.20"), self.tick(3, bid)],
+                    rules, provenance_approved=True,
+                )
+                self.assertEqual(r.outcome, ReplayOutcome.NO_EXIT_EVIDENCE)
+                self.assertIsNone(r.simulated_net_pnl)
+
+    def test_just_before_cutoff_can_still_trigger_hypothetical_exit(self):
+        cutoff = self.at + timedelta(minutes=3)
+        rules = replace(self.rules, last_trading_at=cutoff)
+        close_to_cutoff = replace(
+            self.tick(3, "1.62"),
+            quote=replace(
+                self.tick(3, "1.62").quote,
+                observed_at=cutoff - timedelta(microseconds=1),
+            ),
+        )
+        r = replay_long_option(
+            [self.tick(0, "1.18", "1.20"), close_to_cutoff],
+            rules, provenance_approved=True,
+        )
+        self.assertEqual(r.outcome, ReplayOutcome.TARGET_EXIT)
+        self.assertLess(r.exit_at, cutoff)
+        self.assertEqual(r.simulated_net_pnl, D("37.42"))
+
+    def test_exact_cutoff_cannot_start_a_hypothetical_entry(self):
+        cutoff = self.at + timedelta(minutes=3)
+        rules = replace(self.rules, last_trading_at=cutoff)
+        r = replay_long_option(
+            [self.tick(3, "1.18", "1.20"), self.tick(4, "1.62")],
+            rules, provenance_approved=True,
+        )
+        self.assertEqual(r.outcome, ReplayOutcome.NO_ENTRY_LIQUIDITY)
+        self.assertIsNone(r.simulated_net_pnl)
+
     def test_requires_explicit_provenance_assertion(self):
         r = replay_long_option([self.tick(0, "1.18", "1.20"),
                                  self.tick(3, "1.62")], self.rules)
@@ -164,6 +204,18 @@ class QuoteReplayTests(unittest.TestCase):
         r = replay_long_option([self.tick(0, "1.18", "1.20")],
                                rules, provenance_approved=True)
         self.assertEqual(r.outcome, ReplayOutcome.NO_EXIT_EVIDENCE)
+
+    def test_direct_python_rules_reject_extreme_finite_decimal_exponents(self):
+        # The CLI gate must not be the only protection: callers can construct
+        # ReplayRules directly with unsafe scientific-notation inputs.
+        for field in (
+            "entry_fee_per_contract", "exit_fee_per_contract",
+            "entry_slippage_per_share", "exit_slippage_per_share",
+            "target_net_profit", "maximum_net_loss",
+        ):
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(ValueError, "bounded"):
+                    replace(self.rules, **{field: D("1e999999999")})
 
     def test_bad_rules(self):
         with self.assertRaises(ValueError):

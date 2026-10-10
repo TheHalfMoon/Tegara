@@ -108,6 +108,30 @@ class OfflineQuoteCSVTests(unittest.TestCase):
             read_option_csv(self.path, expected_contract=self.contract,
                             expected_quantity=2, last_trading_at=cutoff)
 
+    def test_quote_exactly_at_user_supplied_cutoff_is_rejected(self):
+        # A snapshot at the cutoff is no longer tradable; the boundary
+        # must be strictly earlier than last_trading_at.
+        cutoff = datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc)
+        self.write([self.row(observed_at=cutoff.isoformat())])
+        with self.assertRaisesRegex(ValueError, "last trading cutoff"):
+            read_option_csv(
+                self.path, expected_contract=self.contract,
+                expected_quantity=2, last_trading_at=cutoff,
+            )
+
+    def test_quote_just_before_cutoff_is_still_accepted_as_unverified(self):
+        cutoff = datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc)
+        self.write([self.row(
+            observed_at=(cutoff - timedelta(microseconds=1)).isoformat()
+        )])
+        ticks, quality = read_option_csv(
+            self.path, expected_contract=self.contract,
+            expected_quantity=2, last_trading_at=cutoff,
+        )
+        self.assertEqual(len(ticks), 1)
+        self.assertLess(ticks[0].quote.observed_at, cutoff)
+        self.assertFalse(quality.live_eligible)
+
     def test_cutoff_metadata_never_claims_independent_verification(self):
         self.write([self.row()])
         cutoff = datetime(2026, 10, 9, 20, 0, tzinfo=timezone.utc)
@@ -127,6 +151,19 @@ class OfflineQuoteCSVTests(unittest.TestCase):
                 self.write([self.row(**values)])
                 with self.assertRaisesRegex(ValueError, "invalid quote"):
                     self.read()
+
+    def test_extreme_finite_bid_and_ask_exponents_rejected_cleanly(self):
+        for value in ("1e999999999", "1e-999999999",
+                      "0e999999999", "1e-19",
+                      "1.23456789012345678901234567890"):
+            for field in ("bid", "ask"):
+                with self.subTest(value=value, field=field):
+                    row = self.row(**{field: value})
+                    if field == "bid":
+                        row["ask"] = value
+                    self.write([row])
+                    with self.assertRaisesRegex(ValueError, "invalid quote"):
+                        self.read()
 
     def test_broken_size_and_feed_rejected(self):
         for values in ({"bid_size": "-1"}, {"ask_size": "1.0"},

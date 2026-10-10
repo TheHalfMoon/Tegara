@@ -8,12 +8,24 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
+import re
 from zoneinfo import ZoneInfo
 
 
 def _money(value: Decimal, label: str) -> Decimal:
+    """Reject numbers too large or too fine for bounded Decimal arithmetic.
+
+    A value may be *finite* yet have an exponent like 1e999999999, which
+    overflows normal Decimal contexts during replay or accounting.
+    """
     if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
         raise ValueError(f"{label} must be a finite, nonnegative Decimal")
+    representation = value.as_tuple()
+    if (not isinstance(representation.exponent, int)
+            or not -18 <= representation.exponent <= 12
+            or len(representation.digits) > 28
+            or value > Decimal("1000000000000")):
+        raise ValueError(f"{label} exceeds bounded precision or amount")
     return value
 
 
@@ -26,8 +38,13 @@ class OptionContract:
     multiplier: int = 100
 
     def __post_init__(self) -> None:
-        if not self.symbol or self.symbol != self.symbol.upper() or not self.symbol.replace(".", "").isalnum():
-            raise ValueError("symbol must be a canonical uppercase ticker")
+        # Unicode lookalikes can pass str.isalnum()/str.isupper() and create
+        # visually deceptive contract identifiers. Only accept a bounded
+        # US-market-oriented ASCII root (e.g. SPY, BRK.B, adjusted SPY1).
+        if (not isinstance(self.symbol, str) or len(self.symbol) > 16
+                or re.fullmatch(r"[A-Z0-9]+(?:\.[A-Z0-9]+)*", self.symbol,
+                                flags=re.ASCII) is None):
+            raise ValueError("symbol must be a bounded canonical ASCII uppercase ticker")
         if self.right not in ("C", "P"):
             raise ValueError("right must be C or P")
         _money(self.strike, "strike")
@@ -35,8 +52,8 @@ class OptionContract:
             raise ValueError("strike must be positive")
         if not isinstance(self.expiration, date) or isinstance(self.expiration, datetime):
             raise ValueError("expiration must be a date")
-        if type(self.multiplier) is not int or self.multiplier <= 0:
-            raise ValueError("multiplier must be a positive integer")
+        if type(self.multiplier) is not int or not 1 <= self.multiplier <= 1000000:
+            raise ValueError("multiplier must be a positive integer <= 1000000")
 
 
 @dataclass(frozen=True)
@@ -49,8 +66,8 @@ class LongOptionPosition:
 
     def __post_init__(self) -> None:
         _money(self.entry_price, "entry_price")
-        if type(self.quantity) is not int or self.quantity <= 0:
-            raise ValueError("quantity must be a positive integer")
+        if type(self.quantity) is not int or not 1 <= self.quantity <= 1000000:
+            raise ValueError("quantity must be a positive integer <= 1000000")
         _money(self.entry_fee_per_contract, "entry_fee_per_contract")
         _money(self.exit_fee_per_contract, "exit_fee_per_contract")
 

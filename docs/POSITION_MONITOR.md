@@ -63,3 +63,17 @@ time is at/after that cutoff, AFTER_CUTOFF suppresses the alert. Expiration
 date alone is insufficient because different option products and shortened
 sessions can have different last trading times. A supplied cutoff remains
 unverified metadata, not proof of broker/venue acceptance.
+
+## Bounded numerical input (research-only)
+
+Local fill price, per-contract manual exit fee, and monitor target are
+validated with the same Decimal representation boundaries as the core
+options engine. Finite scientific-notation representations with extreme
+exponents (for example 1e999999999, 1e-999999999, 0e999999999, 1e-19)
+are rejected before any position ledger transaction. This is important
+because finite Decimal.is_finite() alone does NOT ensure arithmetic
+safety. A rejection must never create a fill or decrement open quantity.
+
+This is an input-integrity check for user-declared offline records; it
+does not establish actual Derayah execution, prices, order identity,
+external timestamp provenance, or real option market-data authorization.

@@ -51,6 +51,13 @@ class LocalNotificationTests(TestCase):
                 with self.assertRaises(ValueError):
                     self.notice(profit=target)
 
+    def test_extreme_finite_bid_and_goal_cannot_create_notification(self):
+        for value in ("1e999999999", "1e-999999999", "0e999999999"):
+            for name in ("bid", "profit"):
+                with self.subTest(value=value, field=name):
+                    with self.assertRaisesRegex(ValueError, "bounded"):
+                        self.notice(**{name: value})
+
     def test_must_not_create_unlabelled_notification(self):
         with self.assertRaisesRegex(ValueError, "unlabelled"):
             ResearchNotice("Sell your CALL NOW!", "MANUAL BID / NOT VERIFIED")

@@ -223,3 +223,48 @@ reusing the target-trigger Bid as its sell fill. The legacy optimistic
 depth or quotes abstain; a triggered target can still have negative hypothetical
 PnL at a later lower Bid. See docs/LATENCY_REPLAY.md. This never places
 or confirms a Derayah order and does not verify licensed OPRA data.
+
+## Fixed latency sensitivity stress matrix (LT-P02)
+
+The offline option quote replay also accepts a fixed entry/exit latency
+grid (e.g. --entry-latency-grid 1,5,30 and --exit-latency-grid 1,5,30).
+It evaluates bounded, deterministically ordered delayed scenarios against
+the SAME CSV snapshot without selecting the historically best latency.
+Missing fill evidence stays null and suppresses aggregate hypothetical
+min/max; the top-level result never pretends to be a single executed fill.
+The usual unverified OPRA, data-rights, phone and broker caveats apply.
+See docs/LATENCY_SENSITIVITY.md.
+
+## Contract symbol spoofing guard
+
+Option symbols must be canonical ASCII uppercase roots (bounded length;
+dotted and adjusted forms supported). Full-width and Cyrillic lookalike
+characters fail closed before calculations or user-declared recording.
+This is not OCC contract symbology or real quote provenance verification.
+See docs/QUOTE_DATA_QUALITY.md.
+
+## Release readiness audit (GOV-P01)
+
+A read-only command reports exact-head Python, TesterArmy and CodeQL
+GitHub checks, open drafts and explicitly unverified external launch
+requirements. Green CI never proves Alibaba OCR, OPRA licensing,
+Derayah order execution or successful phone delivery.
+
+    PYTHONPATH=src python3 scripts/release_gate_audit.py --pr 34 --strict
+
+Strict mode exits 2 for a blocked research-only release. This CLI never
+places trades, sends notifications, edits GitHub or purchases data.
+See docs/RELEASE_GATE_AUDIT.md.
+
+## Local notification outbox reconciliation (NT-P02)
+
+A read-only audit reports counts of unacknowledged notification claims,
+including claims later invalidated by adverse quotes, without exposing
+claim tokens, altering SQLite or sending push/broker orders.
+
+    PYTHONPATH=src python3 -m tegara.outbox_audit \
+      --db /private/path/to/local/positions.sqlite --strict
+
+The input must be an existing private database. See
+docs/OUTBOX_RECONCILIATION.md. A transport-provider ACK is not phone
+delivery, and this audit cannot authorize live options trading.

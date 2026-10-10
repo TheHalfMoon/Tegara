@@ -12,7 +12,8 @@ from enum import Enum
 from zoneinfo import ZoneInfo
 
 from .core import (
-    LongOptionPosition, OptionContract, OptionQuote, calculate_net_exit_pnl
+    LongOptionPosition, OptionContract, OptionQuote, calculate_net_exit_pnl,
+    _money,
 )
 
 
@@ -51,16 +52,14 @@ class ReplayRules:
     last_trading_at: datetime | None = None  # externally supplied; never inferred
 
     def __post_init__(self) -> None:
-        if type(self.quantity) is not int or self.quantity <= 0:
-            raise ValueError("quantity must be a positive integer")
+        if type(self.quantity) is not int or not 1 <= self.quantity <= 1000000:
+            raise ValueError("quantity must be a positive integer <= 1000000")
         for name in (
             "entry_fee_per_contract", "exit_fee_per_contract",
             "entry_slippage_per_share", "exit_slippage_per_share",
             "target_net_profit", "maximum_net_loss",
         ):
-            value = getattr(self, name)
-            if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
-                raise ValueError(f"{name} must be nonnegative finite Decimal")
+            _money(getattr(self, name), name)
         if self.deadline.tzinfo is None or self.deadline.utcoffset() is None:
             raise ValueError("deadline must be timezone aware")
         if self.max_quote_gap <= timedelta(0):
@@ -143,7 +142,9 @@ def replay_long_option(
                 note="Unpriced exposure across a quote-data gap; no profit claim"
             )
         previous_at = q.observed_at
-        if q.observed_at > effective_deadline:
+        if q.observed_at >= effective_deadline:
+            # A quote at the last-trading cutoff or user deadline cannot
+            # become an instantaneous hypothetical option sell/stop fill.
             break
         if q.bid_size < rules.quantity or q.bid <= rules.exit_slippage_per_share:
             continue

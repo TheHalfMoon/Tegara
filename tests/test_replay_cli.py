@@ -202,6 +202,16 @@ class OfflineReplayCLITests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertFalse(result.stdout)
 
+    def test_extreme_finite_cli_decimal_rejected_without_traceback(self):
+        for value in ("1e999999999", "1e-999999999",
+                      "0e999999999", "1e-19"):
+            with self.subTest(value=value):
+                r = self.run_cmd(change={"--entry-fee": value})
+                self.assertEqual(r.returncode, 2)
+                self.assertIn("bounded", r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse(r.stdout)
+
     def test_max_gap_bound_denied(self):
         for gap in ("0", "-5", "3601"):
             with self.subTest(gap=gap):
@@ -301,6 +311,127 @@ class OfflineReplayCLITests(unittest.TestCase):
                          change={"--max-gap-seconds": "5"})
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(json.loads(p.stdout)["outcome"], "NO_ENTRY_EVIDENCE")
+
+    def grid_data(self):
+        self.rows = [
+            self.row(seconds=0, bid="1.18", ask="1.20"),
+            self.row(seconds=1, bid="1.19", ask="1.25"),
+            self.row(seconds=2, bid="1.65", ask="1.69"),
+            self.row(seconds=3, bid="0.80", ask="0.85"),
+            self.row(seconds=4, bid="1.55", ask="1.60"),
+        ]
+        self.write()
+
+    def test_grid_cli_reuses_one_dataset_and_has_no_scalar_profit(self):
+        self.grid_data()
+        p = self.run_cmd("--allow-hypothetical-pnl",
+                         "--entry-latency-grid", "4,1",
+                         "--exit-latency-grid", "2,1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual(r["outcome"], "LATENCY_SENSITIVITY_ONLY")
+        self.assertIsNone(r["hypothetical_net_pnl_usd"])
+        self.assertEqual(r["parameters"]["execution_mode"], "delayed")
+        matrix = r["latency_sensitivity"]
+        self.assertEqual(matrix["scenario_count"], 4)
+        self.assertEqual(matrix["scenarios_with_priced_hypothetical_exit"], 2)
+        self.assertEqual(matrix["scenarios_without_exit_pnl"], 2)
+        self.assertIsNone(matrix["min_hypothetical_pnl_only_if_complete_usd"])
+        self.assertEqual(matrix["scenario_results"][0]["hypothetical_net_pnl_usd"],
+                         "-49.58")
+        self.assertIsNone(matrix["selected_optimal_latency"])
+        self.assertFalse(r["source_provenance_independently_verified"])
+        self.assertEqual(r["input_quality"]["csv_sha256"],
+                         sha256(self.csv.read_bytes()).hexdigest())
+
+    def test_grid_reports_only_actually_applied_latency_settings(self):
+        self.grid_data()
+        p = self.run_cmd("--allow-hypothetical-pnl",
+                         "--entry-latency-grid", "4,1",
+                         "--exit-latency-grid", "2,1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        params = json.loads(p.stdout)["parameters"]
+        self.assertIsNone(params["entry_latency_seconds"])
+        self.assertIsNone(params["exit_latency_seconds"])
+        self.assertEqual(params["entry_latency_grid"], [1, 4])
+        self.assertEqual(params["exit_latency_grid"], [1, 2])
+
+    def test_grid_rejects_ambiguous_single_latency_overrides(self):
+        self.grid_data()
+        for extra in (("--entry-latency-seconds", "1"),
+                      ("--exit-latency-seconds", "5")):
+            with self.subTest(extra=extra):
+                p = self.run_cmd("--allow-hypothetical-pnl",
+                                 "--entry-latency-grid", "1,4",
+                                 "--exit-latency-grid", "1,2", *extra)
+                self.assertEqual(p.returncode, 2)
+                self.assertIn("cannot accompany a grid", p.stderr)
+                self.assertFalse(p.stdout)
+
+    def test_grid_cli_no_optin_never_reports_profit(self):
+        self.grid_data()
+        p = self.run_cmd("--entry-latency-grid", "1,4",
+                         "--exit-latency-grid", "1,2")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        report = json.loads(p.stdout)
+        self.assertEqual(report["outcome"], "UNQUALIFIED_DATA")
+        self.assertIsNone(report["hypothetical_net_pnl_usd"])
+        self.assertEqual(
+            report["latency_sensitivity"]["scenarios_with_priced_hypothetical_exit"], 0
+        )
+        self.assertTrue(all(scenario["hypothetical_net_pnl_usd"] is None
+                            for scenario in report["latency_sensitivity"]["scenario_results"]))
+
+    def test_grid_cli_requires_two_axes_and_delayed_mode(self):
+        self.grid_data()
+        for extra in (
+            ("--entry-latency-grid", "1,2"),
+            ("--exit-latency-grid", "1,2"),
+            ("--entry-latency-grid", "1", "--exit-latency-grid", "1",
+             "--execution-mode", "instant-reference"),
+        ):
+            with self.subTest(extra=extra):
+                p = self.run_cmd("--allow-hypothetical-pnl", *extra)
+                self.assertEqual(p.returncode, 2)
+                self.assertFalse(p.stdout)
+
+    def test_grid_cli_rejects_unbounded_or_malformed_axes(self):
+        self.grid_data()
+        for axis in ("0,1", "1,1", "1, 2", "1,2,3,4,5",
+                     "1e2", "1,301", ",1", "1,"):
+            with self.subTest(axis=axis):
+                p = self.run_cmd("--allow-hypothetical-pnl",
+                                 "--entry-latency-grid", axis,
+                                 "--exit-latency-grid", "1")
+                self.assertEqual(p.returncode, 2)
+                self.assertFalse(p.stdout)
+
+    def test_grid_cli_indicative_quote_denies_priced_exit(self):
+        self.grid_data()
+        self.rows[2]["feed_type"] = "INDICATIVE"
+        self.write()
+        p = self.run_cmd("--allow-hypothetical-pnl",
+                         "--entry-latency-grid", "1",
+                         "--exit-latency-grid", "1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual(r["latency_sensitivity"]["scenario_results"][0]["outcome"],
+                         "UNQUALIFIED_DATA")
+        self.assertIsNone(r["latency_sensitivity"]["scenario_results"][0][
+            "hypothetical_net_pnl_usd"])
+
+    def test_grid_cli_parses_csv_only_once(self):
+        from unittest.mock import patch
+        from tegara import replay_cli
+        from tegara.quote_import import read_option_csv
+        self.grid_data()
+        command = self.cmd("--allow-hypothetical-pnl",
+                           "--entry-latency-grid", "1,4",
+                           "--exit-latency-grid", "1,2")
+        with patch("tegara.replay_cli.read_option_csv", wraps=read_option_csv) as read:
+            report = replay_cli.evaluate(replay_cli.parser().parse_args(command[3:]))
+            self.assertEqual(read.call_count, 1)
+            self.assertEqual(report["latency_sensitivity"]["scenario_count"], 4)
 
     def test_tool_does_not_write_or_modify_source(self):
         before = self.csv.read_bytes()

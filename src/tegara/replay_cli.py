@@ -13,8 +13,9 @@ from decimal import Decimal, InvalidOperation
 import json
 import sys
 
-from .core import OptionContract
+from .core import OptionContract, _money
 from .latency_replay import DelayedReplay, delayed_long_option
+from .latency_sensitivity import latency_sensitivity, parse_latency_axis
 from .quote_import import read_option_csv
 from .quote_replay import ReplayOutcome, ReplayResult, ReplayRules, replay_long_option
 
@@ -26,8 +27,7 @@ def decimal_amount(value: str) -> Decimal:
         result = Decimal(value)
     except (ValueError, InvalidOperation) as exc:
         raise ValueError("amount must be a valid Decimal") from exc
-    if not result.is_finite() or result < 0:
-        raise ValueError("amount must be finite and nonnegative")
+    _money(result, "research amount")
     if result > Decimal("1000000000"):
         raise ValueError("amount exceeds supported research bound")
     return result
@@ -74,8 +74,14 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--execution-mode", choices=("instant-reference", "delayed"),
                    default="delayed",
                    help="Delayed (default) uses later quote; instant-reference is optimistic and opt-in")
-    p.add_argument("--entry-latency-seconds", type=int, default=1)
-    p.add_argument("--exit-latency-seconds", type=int, default=1)
+    p.add_argument("--entry-latency-seconds", type=int,
+                   help="Single-scenario entry latency, default 1s; incompatible with grid")
+    p.add_argument("--exit-latency-seconds", type=int,
+                   help="Single-scenario exit latency, default 1s; incompatible with grid")
+    p.add_argument("--entry-latency-grid",
+                   help="Research sensitivity axis: e.g. 1,5,30 (max 4 distinct)")
+    p.add_argument("--exit-latency-grid",
+                   help="Research sensitivity axis: e.g. 1,5,30 (max 4 distinct)")
     p.add_argument("--allow-hypothetical-pnl", action="store_true",
                    help="Explicitly request research P&L; NOT source/license certification")
     return p
@@ -90,8 +96,36 @@ def evaluate(args: argparse.Namespace) -> dict:
         raise ValueError("max-gap-seconds must be between 1 and 3600")
     for field in ("entry_latency_seconds", "exit_latency_seconds"):
         value = getattr(args, field)
-        if type(value) is not int or not 1 <= value <= 300:
+        if value is not None and (
+            type(value) is not int or not 1 <= value <= 300
+        ):
             raise ValueError(f"{field} must be an integer from 1 to 300")
+    grid_requested = (args.entry_latency_grid is not None
+                      or args.exit_latency_grid is not None)
+    if grid_requested and (
+        args.entry_latency_seconds is not None or
+        args.exit_latency_seconds is not None
+    ):
+        raise ValueError("single-scenario latency flags cannot accompany a grid")
+    single_entry_latency = (
+        args.entry_latency_seconds if args.entry_latency_seconds is not None else 1
+    )
+    single_exit_latency = (
+        args.exit_latency_seconds if args.exit_latency_seconds is not None else 1
+    )
+    entry_axis = exit_axis = None
+    if grid_requested:
+        if (args.entry_latency_grid is None or
+                args.exit_latency_grid is None):
+            raise ValueError("both latency grid axes are required")
+        if args.execution_mode != "delayed":
+            raise ValueError("latency grid requires delayed execution mode")
+        entry_axis = parse_latency_axis(
+            args.entry_latency_grid, name="entry-latency-grid"
+        )
+        exit_axis = parse_latency_axis(
+            args.exit_latency_grid, name="exit-latency-grid"
+        )
     deadline = aware_time(args.deadline)
     cutoff = aware_time(args.last_trading_at)
     entry_not_before = aware_time(args.entry_not_before)
@@ -125,11 +159,24 @@ def evaluate(args: argparse.Namespace) -> dict:
         tick for tick in ticks if tick.quote.observed_at >= entry_not_before
     ]
     first = available[0] if available else None
-    if args.execution_mode == "delayed":
+    stress_grid = None
+    if grid_requested:
+        stress_grid = latency_sensitivity(
+            ticks, rules, entry_decision_at=entry_not_before,
+            entry_delays=entry_axis, exit_delays=exit_axis,
+            allow_hypothetical=allow_hypothetical,
+        )
+        # A stress grid is not a single putative trade/fill and MUST NOT
+        # have a scalar P&L masquerading as one.
+        result = DelayedReplay(
+            ReplayOutcome.UNQUALIFIED_DATA, entry_not_before,
+            note="Fixed latency sensitivity grid, not one executed trade",
+        )
+    elif args.execution_mode == "delayed":
         result = delayed_long_option(
             ticks, rules, entry_decision_at=entry_not_before,
-            entry_latency=timedelta(seconds=args.entry_latency_seconds),
-            exit_latency=timedelta(seconds=args.exit_latency_seconds),
+            entry_latency=timedelta(seconds=single_entry_latency),
+            exit_latency=timedelta(seconds=single_exit_latency),
             allow_hypothetical=allow_hypothetical,
         )
     elif first is None or (
@@ -182,16 +229,24 @@ def evaluate(args: argparse.Namespace) -> dict:
             "last_trading_at_user_supplied": cutoff.isoformat(),
             "max_gap_seconds": args.max_gap_seconds,
             "execution_mode": args.execution_mode,
-            "entry_latency_seconds": (args.entry_latency_seconds
-                                      if is_delayed else None),
-            "exit_latency_seconds": (args.exit_latency_seconds
-                                     if is_delayed else None),
+            "entry_latency_seconds": (
+                single_entry_latency if is_delayed and not grid_requested else None
+            ),
+            "exit_latency_seconds": (
+                single_exit_latency if is_delayed and not grid_requested else None
+            ),
+            "entry_latency_grid": (list(entry_axis) if grid_requested else None),
+            "exit_latency_grid": (list(exit_axis) if grid_requested else None),
         },
         "hypothetical_pnl_requested": allow_hypothetical,
         "decision_trigger_at": (
             result.trigger_at.isoformat() if is_delayed and result.trigger_at else None
         ),
-        "outcome": result.outcome.value,
+        "outcome": (
+            "LATENCY_SENSITIVITY_ONLY"
+            if grid_requested and allow_hypothetical else result.outcome.value
+        ),
+        "latency_sensitivity": stress_grid,
         "entry_at": result.entry_at.isoformat() if result.entry_at else None,
         "exit_at": result.exit_at.isoformat() if result.exit_at else None,
         "entry_premium": str(result.entry_premium) if result.entry_premium is not None else None,
