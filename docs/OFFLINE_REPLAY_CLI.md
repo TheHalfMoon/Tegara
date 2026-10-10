@@ -107,3 +107,14 @@ to compare an optimistic same-observation hypothetical with delayed-price
 scenarios. It does not establish executable prices. Do not interpret a
 delayed TARGET_EXIT trigger as a guaranteed positive profit: execution
 can happen at a worse Bid, including a loss.
+
+## Fixed latency sensitivity grid (LT-P02)
+
+For a bounded matrix of delayed research outcomes, add BOTH
+--entry-latency-grid 1,5,30 and --exit-latency-grid 1,5,30 instead
+of relying on a single chosen latency. Grid mode parses the same CSV
+snapshot ONCE and evaluates at most 16 combinations; instant-reference
+cannot be mixed into a grid. A grid is NOT one trade: scalar P&L is null.
+Unobserved scenarios remain null rather than being filled with zero.
+The grid never chooses an optimal latency based on retrospective results.
+See docs/LATENCY_SENSITIVITY.md for examples and qualification limits.

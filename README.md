@@ -223,3 +223,14 @@ reusing the target-trigger Bid as its sell fill. The legacy optimistic
 depth or quotes abstain; a triggered target can still have negative hypothetical
 PnL at a later lower Bid. See docs/LATENCY_REPLAY.md. This never places
 or confirms a Derayah order and does not verify licensed OPRA data.
+
+## Fixed latency sensitivity stress matrix (LT-P02)
+
+The offline option quote replay also accepts a fixed entry/exit latency
+grid (e.g. --entry-latency-grid 1,5,30 and --exit-latency-grid 1,5,30).
+It evaluates bounded, deterministically ordered delayed scenarios against
+the SAME CSV snapshot without selecting the historically best latency.
+Missing fill evidence stays null and suppresses aggregate hypothetical
+min/max; the top-level result never pretends to be a single executed fill.
+The usual unverified OPRA, data-rights, phone and broker caveats apply.
+See docs/LATENCY_SENSITIVITY.md.
