@@ -6,6 +6,7 @@ can occur implicitly. A human records any Derayah sell-to-close execution.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -14,6 +15,7 @@ from pathlib import Path
 import os
 import sqlite3
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from .core import (
     AlertStatus, LongOptionPosition, OptionContract, OptionQuote, assess_profit_target
@@ -126,12 +128,32 @@ class PositionStore:
               id TEXT PRIMARY KEY, position_id TEXT NOT NULL REFERENCES positions(id),
               quote_at TEXT NOT NULL, bid TEXT NOT NULL,
               net TEXT NOT NULL, target TEXT NOT NULL,
-              state TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL
+              state TEXT NOT NULL DEFAULT 'PENDING', created_at TEXT NOT NULL,
+              quote_expires_at TEXT, contract_cutoff_at TEXT,
+              claim_token TEXT, claimed_at TEXT, accepted_at TEXT,
+              receipt_digest TEXT
+            );
+            CREATE TABLE IF NOT EXISTS provider_ack_events (
+              notice_id TEXT PRIMARY KEY REFERENCES outbox(id),
+              accepted_at TEXT NOT NULL,
+              receipt_digest TEXT NOT NULL,
+              considered_timely INTEGER NOT NULL
             );
         """)
         columns = {row["name"] for row in self.db.execute("PRAGMA table_info(monitor)")}
         if "last_target" not in columns:
             self.db.execute("ALTER TABLE monitor ADD COLUMN last_target TEXT")
+        outbox_columns = {
+            row["name"] for row in self.db.execute("PRAGMA table_info(outbox)")
+        }
+        # Old development-database pending rows have no immutable policy.
+        # They must fail closed at revalidation; never infer one on migration.
+        for field in (
+            "quote_expires_at", "contract_cutoff_at", "claim_token",
+            "claimed_at", "accepted_at", "receipt_digest",
+        ):
+            if field not in outbox_columns:
+                self.db.execute(f"ALTER TABLE outbox ADD COLUMN {field} TEXT")
 
     @contextmanager
     def _transaction(self):
@@ -222,7 +244,7 @@ class PositionStore:
             # open quantity. It must never be delivered as a current sell prompt.
             self.db.execute(
                 "UPDATE outbox SET state='INVALIDATED_BY_FILL' "
-                "WHERE position_id=? AND state='PENDING'", (key,)
+                "WHERE position_id=? AND state IN ('PENDING', 'CLAIMED')", (key,)
             )
             # Revalidate against a new quote and new remaining quantity.
             self.db.execute(
@@ -255,12 +277,37 @@ class PositionStore:
                 AlertStatus.SUPPRESSED_WRONG_TRADING_DATE: MonitorDecision.WRONG_TRADING_DATE,
             }
             if result.status in errors:
+                if result.status is AlertStatus.SUPPRESSED_INSUFFICIENT_SIZE:
+                    # A newer otherwise qualified quote with inadequate Bid
+                    # depth cancels any older unclaimed/claimed sell prompt.
+                    prior = self.db.execute(
+                        "SELECT last_quote_at FROM monitor WHERE position_id=?", (key,)
+                    ).fetchone()
+                    at = stamp(quote.observed_at)
+                    if (quote.contract == snap.contract and
+                            quote.feed_type == "EXACT_NBBO" and
+                            (prior["last_quote_at"] is None or
+                             at > prior["last_quote_at"])):
+                        self.db.execute(
+                            "UPDATE outbox SET state='INVALIDATED_LIQUIDITY' "
+                            "WHERE position_id=? AND state IN ('PENDING','CLAIMED')",
+                            (key,),
+                        )
+                        self.db.execute(
+                            "UPDATE monitor SET armed=1,last_quote_at=? "
+                            "WHERE position_id=?", (at, key),
+                        )
                 return MonitorResult(errors[result.status])
             observed = stamp(quote.observed_at)
             state = self.db.execute("SELECT * FROM monitor WHERE position_id=?", (key,)).fetchone()
             if state["last_quote_at"] is not None and observed <= state["last_quote_at"]:
                 return MonitorResult(MonitorDecision.OUT_OF_ORDER)
             if result.status is AlertStatus.TARGET_NOT_REACHED:
+                self.db.execute(
+                    "UPDATE outbox SET state='INVALIDATED_PRICE_REVERSAL' "
+                    "WHERE position_id=? AND state IN ('PENDING','CLAIMED')",
+                    (key,),
+                )
                 self.db.execute(
                     "UPDATE monitor SET armed=1, last_quote_at=?, last_target=? "
                     "WHERE position_id=?", (observed, str(target_net_profit), key)
@@ -269,6 +316,12 @@ class PositionStore:
                                      net_pnl_estimate=result.estimated_net_pnl)
             new_target = (state["last_target"] is None
                           or Decimal(state["last_target"]) != target_net_profit)
+            if new_target:
+                self.db.execute(
+                    "UPDATE outbox SET state='INVALIDATED_TARGET_CHANGE' "
+                    "WHERE position_id=? AND state IN ('PENDING','CLAIMED')",
+                    (key,),
+                )
             self.db.execute(
                 "UPDATE monitor SET armed=0, last_quote_at=?, last_target=? "
                 "WHERE position_id=?", (observed, str(target_net_profit), key)
@@ -277,10 +330,17 @@ class PositionStore:
                 return MonitorResult(MonitorDecision.ALREADY_NOTIFIED,
                                      net_pnl_estimate=result.estimated_net_pnl)
             notice_id = uuid4().hex
+            quote_expiry = min(
+                quote.observed_at + max_age, last_trading_at
+            )
             self.db.execute(
-                "INSERT INTO outbox VALUES (?,?,?,?,?,?,'PENDING',?)",
+                "INSERT INTO outbox "
+                "(id,position_id,quote_at,bid,net,target,state,created_at,"
+                "quote_expires_at,contract_cutoff_at) "
+                "VALUES (?,?,?,?,?,?,'PENDING',?,?,?)",
                 (notice_id, key, observed, str(quote.bid),
-                 str(result.estimated_net_pnl), str(target_net_profit), stamp(now)),
+                 str(result.estimated_net_pnl), str(target_net_profit),
+                 stamp(now), stamp(quote_expiry), stamp(last_trading_at)),
             )
             return MonitorResult(MonitorDecision.ALERT_QUEUED, notice_id,
                                  result.estimated_net_pnl)
@@ -292,12 +352,156 @@ class PositionStore:
         )
         return [dict(row) for row in rows]
 
-    def mark_delivered(self, notice_id: str) -> None:
-        """Only call after a real notification provider reports successful receipt."""
+    def revalidation_candidates(
+        self, key: str, *, now: datetime, max_quote_age: timedelta,
+        last_trading_at: datetime | None,
+    ) -> list[dict[str, str]]:
+        """Atomically CLAIM each still-valid outbox row exactly once.
+
+        This is only a one-time claim for external fresh-quote reassessment,
+        NOT permission to send a sell signal. Claims are not retried after
+        an uncertain provider result: avoid accidental duplicate pushes.
+        """
+        present = stamp(now)
+        if not isinstance(max_quote_age, timedelta) or max_quote_age <= timedelta(0):
+            raise ValueError("max_quote_age must be positive")
+        if last_trading_at is None:
+            return []
+        cutoff = stamp(last_trading_at)
         with self._transaction():
-            updated = self.db.execute(
-                "UPDATE outbox SET state='DELIVERED' WHERE id=? AND state='PENDING'",
-                (notice_id,)
-            )
-            if updated.rowcount != 1:
+            snap = self.get(key)
+            if last_trading_at.astimezone(
+                ZoneInfo("America/New_York")
+            ).date() != snap.contract.expiration:
+                raise ValueError("cutoff must be on the contract NY expiry date")
+            monitor = self.db.execute(
+                "SELECT armed,last_quote_at,last_target FROM monitor WHERE position_id=?",
+                (key,),
+            ).fetchone()
+            rows = self.db.execute(
+                "SELECT * FROM outbox WHERE position_id=? AND state='PENDING' "
+                "ORDER BY created_at, id", (key,)
+            ).fetchall()
+            claimed = []
+            for row in rows:
+                quote_at = datetime.fromisoformat(row["quote_at"])
+                age = now - quote_at
+                expiry = row["quote_expires_at"]
+                original_cutoff = row["contract_cutoff_at"]
+                expired = (
+                    expiry is None or original_cutoff is None or
+                    snap.status is PositionStatus.CLOSED or
+                    present >= cutoff or
+                    (expiry is not None and present >= expiry) or
+                    (original_cutoff is not None and present >= original_cutoff) or
+                    age < timedelta(0) or age > max_quote_age or
+                    monitor["armed"] or
+                    monitor["last_target"] is None or
+                    Decimal(monitor["last_target"]) != Decimal(row["target"]) or
+                    monitor["last_quote_at"] is None or
+                    row["quote_at"] > monitor["last_quote_at"]
+                )
+                if expired:
+                    self.db.execute(
+                        "UPDATE outbox SET state='INVALIDATED_STALE' WHERE id=?",
+                        (row["id"],),
+                    )
+                    continue
+                token = uuid4().hex
+                updated = self.db.execute(
+                    "UPDATE outbox SET state='CLAIMED',claim_token=?,claimed_at=? "
+                    "WHERE id=? AND state='PENDING'",
+                    (token, present, row["id"]),
+                )
+                if updated.rowcount == 1:
+                    candidate = dict(row)
+                    candidate["claim_token"] = token
+                    candidate["state"] = "CLAIMED"
+                    claimed.append(candidate)
+            return claimed
+
+    def record_provider_acceptance(
+        self, notice_id: str, *, claim_token: str,
+        accepted_at: datetime, max_quote_age: timedelta,
+        last_trading_at: datetime | None,
+        provider_accepted: bool, provider_receipt_id: str,
+    ) -> bool:
+        """Record external transport ACK without claiming a phone receipt or fill.
+
+        The caller must use the one-time claim and *independently* recheck a
+        fresh matching contract Bid just before sending. This layer validates
+        immutable notice policy and basic event chronology, but cannot verify
+        whether provider_accepted is a genuine remote service response.
+        """
+        accepted = stamp(accepted_at)
+        if provider_accepted is not True:
+            raise ValueError("actual provider acceptance must be explicitly confirmed")
+        if not isinstance(claim_token, str) or len(claim_token) != 32:
+            raise ValueError("a valid one-time claim token is required")
+        if (not isinstance(provider_receipt_id, str) or
+                not 1 <= len(provider_receipt_id) <= 256 or
+                not provider_receipt_id.isprintable()):
+            raise ValueError("provider receipt id required")
+        if not isinstance(max_quote_age, timedelta) or max_quote_age <= timedelta(0):
+            raise ValueError("max_quote_age must be positive")
+        if last_trading_at is None:
+            raise ValueError("contract cutoff unknown; cannot accept notification")
+        cutoff = stamp(last_trading_at)
+        digest = sha256(provider_receipt_id.encode("utf-8")).hexdigest()
+        with self._transaction():
+            row = self.db.execute(
+                "SELECT * FROM outbox WHERE id=? AND claim_token=?",
+                (notice_id, claim_token),
+            ).fetchone()
+            if row is None:
                 raise KeyError(notice_id)
+            snap = self.get(row["position_id"])
+            if last_trading_at.astimezone(
+                ZoneInfo("America/New_York")
+            ).date() != snap.contract.expiration:
+                raise ValueError("cutoff must be on NY expiry date")
+            if accepted < row["created_at"] or accepted < row["claimed_at"]:
+                raise ValueError("provider acknowledgement predates alert/claim")
+            prior = self.db.execute(
+                "SELECT * FROM provider_ack_events WHERE notice_id=?",
+                (notice_id,),
+            ).fetchone()
+            if prior is not None:
+                if prior["accepted_at"] != accepted or prior["receipt_digest"] != digest:
+                    raise ValueError("conflicting provider acknowledgement")
+                return bool(prior["considered_timely"])
+            age = accepted_at - datetime.fromisoformat(row["quote_at"])
+            invalid = (
+                row["state"] != "CLAIMED" or
+                snap.status is PositionStatus.CLOSED or
+                row["quote_expires_at"] is None or
+                row["contract_cutoff_at"] is None or
+                accepted >= cutoff or
+                (row["quote_expires_at"] is not None
+                 and accepted >= row["quote_expires_at"]) or
+                (row["contract_cutoff_at"] is not None
+                 and accepted >= row["contract_cutoff_at"]) or
+                age < timedelta(0) or age > max_quote_age
+            )
+            new_state = (
+                "PROVIDER_ACCEPTED_TOO_LATE" if invalid
+                else "ACCEPTED_BY_PROVIDER"
+            )
+            self.db.execute(
+                "INSERT INTO provider_ack_events VALUES (?,?,?,?)",
+                (notice_id, accepted, digest, int(not invalid)),
+            )
+            if row["state"] == "CLAIMED":
+                self.db.execute(
+                    "UPDATE outbox SET state=?,accepted_at=?,receipt_digest=? "
+                    "WHERE id=? AND state='CLAIMED'",
+                    (new_state, accepted, digest, notice_id),
+                )
+            else:
+                # Preserve the reason for invalidation while keeping a
+                # separate historical fact that the provider later ACKed.
+                self.db.execute(
+                    "UPDATE outbox SET accepted_at=?,receipt_digest=? WHERE id=?",
+                    (accepted, digest, notice_id),
+                )
+            return not invalid

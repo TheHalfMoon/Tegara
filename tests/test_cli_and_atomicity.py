@@ -80,6 +80,33 @@ class AtomicLedgerTests(unittest.TestCase):
         with PositionStore(self.path) as store:
             self.assertEqual(len(store.pending("p")), 1)
 
+    def test_concurrent_workers_claim_one_notification_only(self):
+        quote = OptionQuote(self.contract, D("1.62"), D("1.66"), 5,
+                            self.at, "test", "EXACT_NBBO")
+        with PositionStore(self.path) as store:
+            result = store.on_quote(
+                "p", quote, self.at, timedelta(seconds=3), D("105"),
+                last_trading_at=self.at + timedelta(hours=5),
+            )
+        self.assertEqual(result.decision, MonitorDecision.ALERT_QUEUED)
+
+        def worker(_):
+            with PositionStore(self.path) as store:
+                return store.revalidation_candidates(
+                    "p", now=self.at + timedelta(seconds=1),
+                    max_quote_age=timedelta(seconds=3),
+                    last_trading_at=self.at + timedelta(hours=5),
+                )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            batches = list(pool.map(worker, range(2)))
+        claimed = [row for group in batches for row in group]
+        self.assertEqual(len(claimed), 1)
+        self.assertEqual(claimed[0]["id"], result.notification_id)
+        self.assertTrue(claimed[0]["claim_token"])
+        with PositionStore(self.path) as store:
+            self.assertEqual(store.pending("p"), [])
+
     def test_two_concurrent_closes_cannot_oversell(self):
         def worker(i):
             with PositionStore(self.path) as store:
