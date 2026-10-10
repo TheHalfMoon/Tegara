@@ -105,7 +105,7 @@ docs/QUOTE_DATA_QUALITY.md. No quote feed or broker access is included.
 ## Sell notification outbox safety (NT-P01)
 
 The local SQLite position manager includes an explicit pre-delivery
-revalidation gate for pending option target alerts. A pending alert is NOT a
+revalidation gate and one-time claim mechanism for pending option target alerts. A pending alert is NOT a
 market order and not proof that an option can still be sold at the quoted Bid.
 Stale, expired, unknown-cutoff and manually closed alerts are suppressed.
 
