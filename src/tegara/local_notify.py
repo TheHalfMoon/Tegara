@@ -34,6 +34,11 @@ class ResearchNotice:
     broker_execution_verified: bool = False
 
     def __post_init__(self) -> None:
+        if (self.status != "LOCAL_MANUAL_RESEARCH_DEMO"
+                or self.market_data_verified is not False
+                or self.phone_delivery_verified is not False
+                or self.broker_execution_verified is not False):
+            raise ValueError("demo cannot represent verified market, phone, or broker state")
         if not self.title.startswith("Tegara RESEARCH DEMO"):
             raise ValueError("cannot create an unlabelled live-like notification")
         if "MANUAL BID / NOT VERIFIED" not in self.body:

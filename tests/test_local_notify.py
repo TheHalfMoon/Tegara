@@ -57,6 +57,18 @@ class LocalNotificationTests(TestCase):
         with self.assertRaisesRegex(ValueError, "must state manual"):
             ResearchNotice("Tegara RESEARCH DEMO", "Verified live quote")
 
+    def test_verified_broker_or_phone_claim_cannot_be_injected(self):
+        safe = self.notice()
+        for kw in (
+            {"status": "LIVE_SELL_NOW"},
+            {"market_data_verified": True},
+            {"phone_delivery_verified": True},
+            {"broker_execution_verified": True},
+        ):
+            with self.subTest(kw=kw):
+                with self.assertRaisesRegex(ValueError, "cannot represent verified"):
+                    ResearchNotice(safe.title, safe.body, **kw)
+
     def test_send_requires_explicit_authorization(self):
         with self.assertRaisesRegex(ValueError, "explicit"):
             show_macos_demo(self.notice())
