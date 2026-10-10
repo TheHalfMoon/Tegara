@@ -160,6 +160,16 @@ class SQLiteWritableSecurityTests(unittest.TestCase):
                 PositionStore(self.path)
         self.assert_victim_untouched()
 
+    def test_existing_empty_file_is_not_initialized_or_chmodded(self):
+        self.parent.mkdir(mode=0o700)
+        self.path.touch()
+        self.path.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "existing empty file"):
+            PositionStore(self.path)
+        self.assertEqual(self.path.read_bytes(), b"")
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o644)
+        self.assert_victim_untouched()
+
     def test_unrelated_plain_file_remains_byte_and_mode_identical(self):
         self.parent.mkdir(mode=0o700)
         contents = b"NOT A SQLITE DATABASE; PRESERVE CONTENT AND MODE"

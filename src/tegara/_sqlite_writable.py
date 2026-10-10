@@ -85,7 +85,7 @@ def _verify_existing_ledger(fd: int, parent_fd: int, path: Path) -> None:
     """
     size = os.fstat(fd).st_size
     if size == 0:
-        return  # Existing empty files retain their prior initialization support.
+        raise ValueError("existing empty file is not a verified Tegara journal")
     if size < 100 or os.pread(fd, 16, 0) != _SQLITE_MAGIC:
         raise ValueError("existing file is not a Tegara SQLite journal")
     _check_identity(fd, parent_fd, path)
