@@ -255,3 +255,16 @@ Derayah order execution or successful phone delivery.
 Strict mode exits 2 for a blocked research-only release. This CLI never
 places trades, sends notifications, edits GitHub or purchases data.
 See docs/RELEASE_GATE_AUDIT.md.
+
+## Local notification outbox reconciliation (NT-P02)
+
+A read-only audit reports counts of unacknowledged notification claims,
+including claims later invalidated by adverse quotes, without exposing
+claim tokens, altering SQLite or sending push/broker orders.
+
+    PYTHONPATH=src python3 -m tegara.outbox_audit \
+      --db /private/path/to/local/positions.sqlite --strict
+
+The input must be an existing private database. See
+docs/OUTBOX_RECONCILIATION.md. A transport-provider ACK is not phone
+delivery, and this audit cannot authorize live options trading.
