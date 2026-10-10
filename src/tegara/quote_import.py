@@ -96,8 +96,10 @@ def read_option_csv(
         raise ValueError("source must be an existing regular non-symlink CSV")
     # Snapshot bytes once so data-hash evidence and parsed observations are
     # the SAME bytes. O_NOFOLLOW prevents symlink swapping during open.
+    if not getattr(os, "O_NOFOLLOW", 0):
+        raise ValueError("atomic no-follow CSV opening is unavailable")
     fd = os.open(
-        path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        path, os.O_RDONLY | os.O_NOFOLLOW
         | getattr(os, "O_NONBLOCK", 0),
     )
     try:

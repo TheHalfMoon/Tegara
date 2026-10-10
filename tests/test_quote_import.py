@@ -9,6 +9,7 @@ from decimal import Decimal as D
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tegara import OptionContract
 from tegara.quote_import import FIELDS, quality_json, read_option_csv
@@ -222,6 +223,33 @@ class OfflineQuoteCSVTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "non-symlink"):
             read_option_csv(link, expected_contract=self.contract,
                             expected_quantity=1)
+
+    def test_missing_atomic_nofollow_support_fails_closed(self):
+        self.write([self.row()])
+        # Simulate a platform exposing no usable O_NOFOLLOW flag. The
+        # importer must refuse, never silently fall back to O_RDONLY.
+        with patch("tegara.quote_import.os.O_NOFOLLOW", 0):
+            with self.assertRaisesRegex(ValueError, "no-follow"):
+                self.read()
+
+    def test_symlink_swap_at_open_never_reads_other_quote_file(self):
+        self.write([self.row()])
+        alternate = Path(self.temp.name) / "unrelated.csv"
+        alternate.write_bytes(self.path.read_bytes().replace(b"1.20", b"1.22"))
+        expected_content = alternate.read_bytes()
+        original_open = os.open
+
+        def insert_symlink_at_open(path, flags, *args, **kwargs):
+            if Path(path) == self.path:
+                self.path.unlink()
+                self.path.symlink_to(alternate)
+            return original_open(path, flags, *args, **kwargs)
+
+        with patch("tegara.quote_import.os.open",
+                   side_effect=insert_symlink_at_open):
+            with self.assertRaises(OSError):
+                self.read()
+        self.assertEqual(alternate.read_bytes(), expected_content)
 
     def test_missing_timezone_denied(self):
         self.write([self.row(observed_at="2026-10-09T14:30:00")])
