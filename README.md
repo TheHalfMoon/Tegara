@@ -114,3 +114,15 @@ it does not represent push delivery to a phone, a human reading an alert or a
 Derayah broker execution. No notification provider is connected yet.
 
 See docs/NOTIFICATION_OUTBOX.md.
+
+## Research-only Kronos bridge (KR-P01)
+
+The tegara.kronos_bridge module can invoke the official upstream
+KronosPredictor on strictly validated 1-minute/5-minute historical underlying
+bars and compare its predicted closes to a persistence baseline. Predictions
+are NOT options quotes, trading signals, probabilities of profit or actual
+Sell-to-Close alerts.
+
+A CPU smoke test using official Kronos-small on deliberately synthetic bars
+passed on an Apple Silicon Mac on 2026-10-10. See docs/KRONOS_BRIDGE.md for
+the pinned upstream revision, optional dependencies and caveats.

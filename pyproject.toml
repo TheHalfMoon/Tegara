@@ -17,3 +17,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.package-data]
 tegara = ["web/*.html", "web/*.css", "web/*.js"]
+
+[project.optional-dependencies]
+kronos-bridge = ["pandas>=2.2,<4"]
