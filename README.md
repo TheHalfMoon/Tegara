@@ -126,3 +126,20 @@ Sell-to-Close alerts.
 A CPU smoke test using official Kronos-small on deliberately synthetic bars
 passed on an Apple Silicon Mac on 2026-10-10. See docs/KRONOS_BRIDGE.md for
 the pinned upstream revision, optional dependencies and caveats.
+
+## TradingView Premium underlying history research (WF-P01)
+
+Tegara can convert a locally exported TradingView-like OHLCV CSV into
+completed-bar timestamps and compare Kronos-small with persistence
+on chronologically held-out underlying market sessions. Source timestamp
+semantics (open vs close) MUST be set explicitly to prevent future-bar leakage.
+
+Read docs/TRADINGVIEW_WALKFORWARD.md for example commands and the explicit
+contract/session cutoff CSV requirements. Inspect-only mode never downloads
+models, calls a remote service or makes orders. Real option bid/ask backtesting
+and historical profitability remain unqualified.
+
+TradingView documents manual chart CSV export at:
+https://www.tradingview.com/support/solutions/43000537255-how-to-export-chart-data/
+Only chart data actually loaded is exported; this is not an OPRA options
+quote feed. Retention rights and actual timestamp semantics require review.

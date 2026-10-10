@@ -8,10 +8,12 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from pathlib import Path
 import sys
 
-from tegara.kronos_bridge import MarketBar, create_window, forecast_underlying
+from tegara.kronos_bridge import (
+    MarketBar, create_window, forecast_underlying,
+    verify_pinned_kronos_checkout,
+)
 
 
 def main() -> int:
@@ -22,9 +24,10 @@ def main() -> int:
                         choices=["NeoQuasar/Kronos-mini", "NeoQuasar/Kronos-small"])
     parser.add_argument("--device", choices=["cpu", "mps"], default="cpu")
     args = parser.parse_args()
-    root = Path(args.upstream_root).expanduser().resolve()
-    if not (root / "model" / "__init__.py").is_file():
-        parser.error("upstream-root must contain the official Kronos model package")
+    try:
+        root = verify_pinned_kronos_checkout(args.upstream_root)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     sys.path.insert(0, str(root))
     from model import Kronos, KronosTokenizer, KronosPredictor

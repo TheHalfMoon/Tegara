@@ -8,7 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Sequence
+import subprocess
 from zoneinfo import ZoneInfo
 
 NY = ZoneInfo("America/New_York")
@@ -197,3 +199,33 @@ def score_forecast(
         (forecast_move == 0 and actual_move == 0)
     )
     return ForecastScore(model_mae, baseline_mae, direction_correct, len(actual))
+
+
+# Canonical research core is pinned to an independently identified upstream
+# commit, preventing accidental execution of a different mutable checkout.
+PINNED_KRONOS_UPSTREAM = "67b630e67f6a18c9e9be918d9b4337c960db1e9a"
+
+
+def verify_pinned_kronos_checkout(source: str | Path) -> Path:
+    """Refuse any unpinned/modified upstream code before import and execution."""
+    root = Path(source).expanduser().resolve()
+    if not (root / "model" / "__init__.py").is_file():
+        raise ValueError("Kronos checkout is missing official model files")
+    def git(*args: str) -> str:
+        result = subprocess.run(
+            ["git", *args], cwd=root, text=True, capture_output=True,
+            check=False, timeout=10,
+        )
+        if result.returncode != 0:
+            raise ValueError("cannot inspect local Kronos checkout integrity")
+        return result.stdout.strip()
+
+    head = git("rev-parse", "HEAD")
+    if head != PINNED_KRONOS_UPSTREAM:
+        raise ValueError("Kronos revision does not match the reviewed source pin")
+    # Prevent edited or untracked Python under model/ from taking precedence
+    # over the verified upstream source. An external dependency chain remains
+    # a separate qualification scope, and model weights are still unpinned.
+    if git("status", "--porcelain", "--", "model"):
+        raise ValueError("Kronos model source files are modified/untracked")
+    return root
