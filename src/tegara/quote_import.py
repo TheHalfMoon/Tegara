@@ -6,6 +6,10 @@ or feed label ever upgrades source trust or authorizes live trading.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
+from io import BytesIO, TextIOWrapper
+import os
+import stat
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -45,6 +49,7 @@ class QuoteQuality:
     licensing_status: str = "NOT_INDEPENDENTLY_VERIFIED"
     venue_cutoff_status: str = "NOT_INDEPENDENTLY_VERIFIED"
     live_eligible: bool = False
+    csv_sha256: str = ""  # exactly the bytes parsed, never a source license certificate
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -91,14 +96,29 @@ def read_option_csv(
     path = Path(source)
     if not path.is_file() or path.is_symlink():
         raise ValueError("source must be an existing regular non-symlink CSV")
-    if path.stat().st_size > MAX_CSV_BYTES:
+    # Snapshot bytes once so data-hash evidence and parsed observations are
+    # the SAME bytes. O_NOFOLLOW prevents symlink swapping during open.
+    fd = os.open(
+        path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0),
+    )
+    try:
+        with os.fdopen(fd, "rb") as source_file:
+            if not stat.S_ISREG(os.fstat(source_file.fileno()).st_mode):
+                raise ValueError("source must be a regular file")
+            raw = source_file.read(MAX_CSV_BYTES + 1)
+    except Exception:
+        # fdopen owns/automatically closes the fd once entered.
+        raise
+    if len(raw) > MAX_CSV_BYTES:
         raise ValueError("CSV is too large for local ingestion limit")
+    content_digest = sha256(raw).hexdigest()
     quotes: list[ReplayTick] = []
     previous: datetime | None = None
     max_gap = timedelta(0)
     zero_bid = insufficient_bid = indicative = locked = 0
     biggest_spread = Decimal(0)
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
+    with TextIOWrapper(BytesIO(raw), encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f, strict=True)
         if reader.fieldnames is None or tuple(reader.fieldnames) != FIELDS:
             raise ValueError("CSV must have the exact Tegara quote columns in order")
@@ -174,6 +194,7 @@ def read_option_csv(
         venue_cutoff_status=("USER_SUPPLIED_NOT_INDEPENDENTLY_VERIFIED"
                              if last_trading_at is not None
                              else "NOT_INDEPENDENTLY_VERIFIED"),
+        csv_sha256=content_digest,
     )
     return quotes, quality
 

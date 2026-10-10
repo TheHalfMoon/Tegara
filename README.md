@@ -198,3 +198,18 @@ See docs/CODEQL_SECURITY.md.
 A separate SQLite terminal tool lets you manually enter a long-option position, inspect its remaining quantity and manually recorded P&L, record a user-declared sell-to-close fill, and list those fill records. Every report is labeled USER_DECLARED_UNVERIFIED and broker_execution_verified=false. Database writes require --record-only and paths inside the repo or symlinked SQLite files are rejected. The tool is offline: it cannot authenticate with Derayah Global, verify trade statements or submit orders.
 
 See docs/MANUAL_JOURNAL.md for complete commands, safety boundaries and test evidence.
+
+## Offline option Bid/Ask replay CLI (RP-P01)
+
+Research-only option quote simulation now combines the existing strict
+single-contract CSV data-quality validator with the Ask+slippage entry,
+Bid-slippage exit, fees and cutoff-aware replay rules in a reproducible
+terminal command. It emits the exact parsed-input SHA-256 and all risk
+assumptions while explicitly setting source and rights proof to false.
+
+Default results ABSTAIN from hypothetical monetary P&L. The optional
+--allow-hypothetical-pnl flag requests synthetic scenario analysis, NOT
+independent vendor license verification, a guaranteed options fill or
+real-world profitability. All runs remain offline and do not touch Derayah.
+
+See docs/OFFLINE_REPLAY_CLI.md for commands, input format and limitations.
