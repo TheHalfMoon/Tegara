@@ -1,0 +1,169 @@
+"""Offline research-only options quote CSV replay command.
+
+This is not a market-data authenticator. User permission to run a hypothetical
+simulation is NOT independent evidence of feed/OPRA license or executed fills.
+No persistent writes, remote calls, notifications, or brokerage actions.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
+import json
+import sys
+
+from .core import OptionContract
+from .quote_import import read_option_csv
+from .quote_replay import ReplayRules, replay_long_option
+
+STATUS = "RESEARCH_ONLY_NOT_LIVE_TRADING"
+
+
+def decimal_amount(value: str) -> Decimal:
+    try:
+        result = Decimal(value)
+    except (ValueError, InvalidOperation) as exc:
+        raise ValueError("amount must be a valid Decimal") from exc
+    if not result.is_finite() or result < 0:
+        raise ValueError("amount must be finite and nonnegative")
+    if result > Decimal("1000000000"):
+        raise ValueError("amount exceeds supported research bound")
+    return result
+
+
+def aware_time(value: str) -> datetime:
+    try:
+        result = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("timestamp must be ISO-8601") from exc
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError("timestamp requires an explicit timezone offset")
+    return result
+
+
+def parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="python -m tegara.replay_cli",
+        description="Offline hypothetical option quote replay; no executed trade claims",
+    )
+    p.add_argument("--csv", required=True, help="One-contract CSV; source not uploaded")
+    p.add_argument("--symbol", required=True)
+    p.add_argument("--right", choices=("C", "P"), required=True)
+    p.add_argument("--strike", required=True)
+    p.add_argument("--expiration", required=True)
+    p.add_argument("--multiplier", type=int, default=100)
+    p.add_argument("--quantity", type=int, required=True)
+    p.add_argument("--entry-fee", required=True)
+    p.add_argument("--exit-fee", required=True)
+    p.add_argument("--entry-slippage", required=True,
+                   help="Premium per deliverable share, added to Ask")
+    p.add_argument("--exit-slippage", required=True,
+                   help="Premium per deliverable share, subtracted from Bid")
+    p.add_argument("--target-net-profit", required=True,
+                   help="Total hypothetical USD net profit over all contracts")
+    p.add_argument("--max-net-loss", required=True,
+                   help="Total hypothetical USD loss threshold; not guaranteed stop fill")
+    p.add_argument("--deadline", required=True, help="Time with UTC offset")
+    p.add_argument("--last-trading-at", required=True,
+                   help="Contract-specific cutoff; user-provided, NOT venue verified")
+    p.add_argument("--max-gap-seconds", required=True, type=int)
+    p.add_argument("--allow-hypothetical-pnl", action="store_true",
+                   help="Explicitly request research P&L; NOT source/license certification")
+    return p
+
+
+def evaluate(args: argparse.Namespace) -> dict:
+    contract = OptionContract(
+        args.symbol, args.right, decimal_amount(args.strike),
+        date.fromisoformat(args.expiration), args.multiplier,
+    )
+    if type(args.max_gap_seconds) is not int or not 1 <= args.max_gap_seconds <= 3600:
+        raise ValueError("max-gap-seconds must be between 1 and 3600")
+    deadline = aware_time(args.deadline)
+    cutoff = aware_time(args.last_trading_at)
+    rules = ReplayRules(
+        contract=contract,
+        quantity=args.quantity,
+        entry_fee_per_contract=decimal_amount(args.entry_fee),
+        exit_fee_per_contract=decimal_amount(args.exit_fee),
+        entry_slippage_per_share=decimal_amount(args.entry_slippage),
+        exit_slippage_per_share=decimal_amount(args.exit_slippage),
+        target_net_profit=decimal_amount(args.target_net_profit),
+        maximum_net_loss=decimal_amount(args.max_net_loss),
+        deadline=deadline,
+        max_quote_gap=timedelta(seconds=args.max_gap_seconds),
+        last_trading_at=cutoff,
+    )
+    ticks, quality = read_option_csv(
+        args.csv, expected_contract=contract,
+        expected_quantity=args.quantity,
+        last_trading_at=cutoff,
+    )
+    # The name of the library parameter dates from an earlier prototype.
+    # Even when true, the flag is ONLY user consent to inspect hypothetical
+    # P&L, never proof of license, NBBO provenance or executable liquidity.
+    allow_hypothetical = args.allow_hypothetical_pnl is True
+    result = replay_long_option(
+        ticks, rules, provenance_approved=allow_hypothetical,
+    )
+    return {
+        "status": STATUS,
+        "input_quality": quality.as_dict(),
+        "contract": {
+            "symbol": contract.symbol,
+            "right": contract.right,
+            "strike": str(contract.strike),
+            "expiration": contract.expiration.isoformat(),
+            "multiplier": contract.multiplier,
+            "quantity": args.quantity,
+        },
+        "parameters": {
+            "entry_fee_per_contract_usd": str(rules.entry_fee_per_contract),
+            "exit_fee_per_contract_usd": str(rules.exit_fee_per_contract),
+            "entry_slippage_per_share": str(rules.entry_slippage_per_share),
+            "exit_slippage_per_share": str(rules.exit_slippage_per_share),
+            "target_net_profit_usd": str(rules.target_net_profit),
+            "maximum_net_loss_usd": str(rules.maximum_net_loss),
+            "deadline": deadline.isoformat(),
+            "last_trading_at_user_supplied": cutoff.isoformat(),
+            "max_gap_seconds": args.max_gap_seconds,
+        },
+        "hypothetical_pnl_requested": allow_hypothetical,
+        "outcome": result.outcome.value,
+        "entry_at": result.entry_at.isoformat() if result.entry_at else None,
+        "exit_at": result.exit_at.isoformat() if result.exit_at else None,
+        "entry_premium": str(result.entry_premium) if result.entry_premium is not None else None,
+        "exit_premium": str(result.exit_premium) if result.exit_premium is not None else None,
+        "hypothetical_net_pnl_usd": (
+            str(result.simulated_net_pnl)
+            if result.simulated_net_pnl is not None else None
+        ),
+        "outcome_note": result.note,
+        "source_provenance_independently_verified": False,
+        "data_licensing_independently_verified": False,
+        "last_trading_time_independently_verified": False,
+        "broker_execution_verified": False,
+        "phone_notification_sent": False,
+        "options_profitability_validated": False,
+        "warning": (
+            "Hypothetical quotes only: source/feed labels and a manual cutoff "
+            "do not prove OPRA licensing, NBBO validity, actual order fills, "
+            "broker commissions, or ability to exit at the simulated price."
+        ),
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parser().parse_args(argv)
+    try:
+        print(json.dumps(evaluate(args), sort_keys=True, indent=2))
+        return 0
+    except (ValueError, TypeError, OSError, OverflowError,
+            csv.Error, UnicodeError) as exc:
+        print(f"Offline research replay rejected: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
