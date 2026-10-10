@@ -143,3 +143,13 @@ TradingView documents manual chart CSV export at:
 https://www.tradingview.com/support/solutions/43000537255-how-to-export-chart-data/
 Only chart data actually loaded is exported; this is not an OPRA options
 quote feed. Retention rights and actual timestamp semantics require review.
+
+## Local macOS Notification Center research demo (LM-P01)
+
+No live option data feed or phone push is connected. You can preview a
+hypothetical option Bid target notice or explicitly send ONE manually entered,
+clearly labeled *research demo* notification to the Mac's Notification Center.
+The delivery response only means macOS accepted the local process request,
+not that a user saw a message or a Derayah options order was filled.
+
+Instructions and opt-in CLI switches: docs/LOCAL_MAC_NOTIFICATIONS.md.
