@@ -95,3 +95,18 @@ local journal operation. This guards accidental identity confusion and
 visual spoofing, not vendor-backed OCC symbology authentication.
 Actual adjusted option deliverables and OCC contract class validity
 still require independent vendor/clearing data.
+
+## Exclusive options last-trade cutoff
+
+A user-supplied last_trading_at is an EXCLUSIVE bound for options quote
+observations: timestamps at or after that moment are invalid for a
+hypothetical option exit. A timestamp just before the cutoff can pass the
+local format/time rules but is STILL not independent OPRA provenance, a
+broker-executable fill, or a verified contract last-trading time.
+
+The legacy instant-reference research replay has the same exclusive
+cutoff and exit deadline semantics. An option target or stop must never be
+marked hypothetically executed on a same-event quote exactly at the cutoff.
+The latency-aware model already requires strictly pre-cutoff later Bid
+observations. Exchange holiday, early-close and contract-specific
+eligibility remain external verification gates.

@@ -133,8 +133,10 @@ def read_option_csv(
                 # the local machine date. Venue time cutoffs remain unverified.
                 if observed.astimezone(NY).date() != expected_contract.expiration:
                     raise ValueError("observation is not on the NY expiration date")
-                if last_trading_at is not None and observed > last_trading_at:
-                    raise ValueError("quote is after explicit last trading cutoff")
+                if last_trading_at is not None and observed >= last_trading_at:
+                    # This is an exclusive upper bound: a quote stamped
+                    # exactly at last-trade cutoff is already non-actionable.
+                    raise ValueError("quote is at or after explicit last trading cutoff")
                 if previous is not None:
                     if observed <= previous:
                         raise ValueError("out-of-order or repeated timestamp")

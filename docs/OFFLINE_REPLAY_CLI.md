@@ -129,3 +129,20 @@ digits, exponent -18 to +12 and magnitude at most 1e12; the replay CLI
 uses a stricter amount cap of 1e9. Quantities and multipliers are also
 bounded. Limits are local engineering safeguards, not an exchange
 tick-size rule or an OPRA certification.
+
+## Strict cutoff boundary
+
+The historical quote importer and optimistic instant-reference replay
+treat last_trading_at as an EXCLUSIVE upper bound: an option Bid observed
+exactly at or after the user-declared cutoff cannot become a target/stop
+hypothetical exit. The same exclusive rule applies to the user deadline
+for instant-reference replay. Delayed replay already uses pre-cutoff Bid
+snapshots only. No source/license or broker exchange eligibility is
+independently authenticated by passing these local checks.
+
+The pure Python ReplayRules constructor also enforces bounded Decimal
+amount, exponent and precision in all fee, slippage and target/stop fields;
+calling the library directly cannot bypass the CLI's finite-number
+resource protection. Replay quantity is bounded consistently with the
+contract position model. These are protective research constraints, not
+venue trade-size certification.
