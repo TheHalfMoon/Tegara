@@ -153,3 +153,13 @@ The delivery response only means macOS accepted the local process request,
 not that a user saw a message or a Derayah options order was filled.
 
 Instructions and opt-in CLI switches: docs/LOCAL_MAC_NOTIFICATIONS.md.
+
+## Synthetic options-target end-to-end regression (SJ-P01)
+
+A zero-network integration test runs an unverified options quote CSV through
+the contract data validator, SQLite target crossing, one-time notification
+claim, simulated provider acceptance, and separately entered manual fill.
+This test never sends a phone/OS notification or places broker orders.
+It also checks unverified feeds and missing session cutoffs fail closed.
+
+See docs/SYNTHETIC_JOURNEY.md for exactly what this evidence does/not prove.
