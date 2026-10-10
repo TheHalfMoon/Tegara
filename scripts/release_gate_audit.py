@@ -47,6 +47,48 @@ def gh_json(args: list[str]) -> object:
         raise RuntimeError("GitHub returned non-JSON state; do not claim CI success") from exc
 
 
+
+def _sha(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value) is not None
+
+
+def _detail_valid(value: object, pr: int) -> bool:
+    return (
+        isinstance(value, dict)
+        and type(value.get("number")) is int and value["number"] == pr
+        and _sha(value.get("headRefOid"))
+        and isinstance(value.get("baseRefName"), str)
+        and bool(value["baseRefName"])
+        and type(value.get("isDraft")) is bool
+        and value.get("state") == "OPEN"
+    )
+
+
+def _open_prs(repo: str, invoke: Callable[[list[str]], object]) -> list[dict]:
+    """Read all pages, not just the first 100 draft/non-draft PRs."""
+    combined: list[dict] = []
+    seen: set[int] = set()
+    for page in range(1, 21):
+        rows = invoke([
+            "api", f"repos/{repo}/pulls?state=open&per_page=100&page={page}",
+        ])
+        if not isinstance(rows, list) or len(rows) > 100:
+            raise ValueError("incomplete or malformed GitHub pull request page")
+        for r in rows:
+            if (not isinstance(r, dict) or type(r.get("number")) is not int
+                    or r["number"] < 1 or r["number"] in seen
+                    or type(r.get("draft")) is not bool
+                    or r.get("state") != "open"
+                    or not isinstance(r.get("head"), dict)
+                    or not _sha(r["head"].get("sha"))):
+                raise ValueError("malformed, duplicate, or inconsistent open PR")
+            seen.add(r["number"])
+            combined.append(r)
+        if len(rows) < 100:
+            return combined
+    raise ValueError("open PR pagination exceeded safe page budget")
+
+
 def audit(
     *,
     repo: str = REPOSITORY,
@@ -58,63 +100,84 @@ def audit(
     if type(pr) is not int or not 1 <= pr <= 1000000:
         raise ValueError("pull request number is out of bounds")
     args = ["--repo", repo]
-    details = ["number", "headRefOid", "baseRefName", "isDraft"]
+    details = ["number", "headRefOid", "baseRefName", "isDraft", "state"]
     before = invoke(["pr", "view", str(pr), *args, "--json", ",".join(details)])
-    checks = invoke([
-        "pr", "checks", str(pr), *args, "--json", "name,state,bucket",
+    if not _detail_valid(before, pr):
+        raise ValueError("malformed, closed or inconsistent target pull request")
+    old_head = before["headRefOid"]
+    # Crucially: immutable commit-pinned status evidence. Mutable PR checks
+    # without SHA attribution can lie if a branch moves A->B->A mid-query.
+    run_data = invoke([
+        "api", f"repos/{repo}/commits/{old_head}/check-runs?per_page=100",
     ])
-    listed = invoke([
-        "pr", "list", *args, "--state", "open", "--limit", "100",
-        "--json", "number,isDraft,headRefOid",
-    ])
+    if not isinstance(run_data, dict) or type(run_data.get("total_count")) is not int:
+        raise ValueError("malformed commit-specific GitHub check response")
+    checks = run_data.get("check_runs")
+    if not isinstance(checks, list) or len(checks) > 100:
+        raise ValueError("malformed commit-specific check collection")
+    complete_checks = run_data["total_count"] == len(checks)
+    if run_data["total_count"] < 0:
+        raise ValueError("negative check collection count")
+    listed = _open_prs(repo, invoke)
+    target_in_list = [p for p in listed if p["number"] == pr]
+    if len(target_in_list) != 1:
+        raise ValueError("target PR missing from complete open inventory")
     after = invoke(["pr", "view", str(pr), *args, "--json", ",".join(details)])
-    if not isinstance(before, dict) or not isinstance(after, dict):
-        raise ValueError("malformed pull request metadata")
-    if not isinstance(checks, list) or not isinstance(listed, list):
-        raise ValueError("malformed pull request or CI collection")
-    old_head = before.get("headRefOid")
-    new_head = after.get("headRefOid")
+    if not _detail_valid(after, pr):
+        raise ValueError("target PR closed or metadata invalid during audit")
     stable = (
-        isinstance(old_head, str)
-        and bool(re.fullmatch(r"[0-9a-f]{40}", old_head))
-        and old_head == new_head
-        and before.get("number") == pr == after.get("number")
+        before == after
+        and target_in_list[0]["head"]["sha"] == old_head
+        and target_in_list[0]["draft"] == before["isDraft"]
     )
+
     by_name: dict[str, list[dict]] = {}
     for check in checks:
-        if not isinstance(check, dict) or not isinstance(check.get("name"), str):
-            raise ValueError("malformed check result")
+        if (not isinstance(check, dict)
+                or not isinstance(check.get("name"), str)
+                or not isinstance(check.get("app"), dict)
+                or not isinstance(check["app"].get("slug"), str)
+                or not _sha(check.get("head_sha"))):
+            raise ValueError("malformed commit check result")
         by_name.setdefault(check["name"], []).append(check)
 
+    expected_apps = {
+        "CodeQL": "github-advanced-security",
+        "CodeQL python": "github-actions",
+        "CodeQL javascript-typescript": "github-actions",
+        "python-domain": "github-actions",
+        "browser-e2e": "github-actions",
+    }
     checked: dict[str, str] = {}
     for name in REQUIRED_CHECKS:
         matches = by_name.get(name, [])
         checked[name] = (
-            "PASS" if stable and len(matches) == 1
-            and matches[0].get("bucket") == "pass"
-            and matches[0].get("state") == "SUCCESS"
+            "PASS" if stable and complete_checks and len(matches) == 1
+            and matches[0].get("head_sha") == old_head
+            and matches[0]["app"]["slug"] == expected_apps[name]
+            and matches[0].get("status") == "completed"
+            and matches[0].get("conclusion") == "success"
             else "NOT_PASS"
         )
     ci = (
-        "PASS" if stable and all(v == "PASS" for v in checked.values())
+        "PASS" if stable and complete_checks
+        and all(v == "PASS" for v in checked.values())
         else "NOT_VERIFIED_OR_INCOMPLETE"
     )
-    if any(not isinstance(p, dict) or type(p.get("isDraft")) is not bool
-           for p in listed):
-        raise ValueError("malformed open pull requests")
-    draft_count = sum(p["isDraft"] for p in listed)
+    draft_count = sum(p["draft"] for p in listed)
 
     # NO automated claim is possible for external entitlements or reviews.
-    # Neither github check names nor a Boolean typed by a user can certify
-    # these. Independent signed/source-backed evidence must be added under
-    # separately reviewed release governance before this tool can change.
+    # Independent signed/source-backed evidence must be added under
+    # separately reviewed release governance before this can change.
     external = {gate: "NOT_INDEPENDENTLY_VERIFIED" for gate in EXTERNAL_GATES}
     blockers = (
         ["PR_HEAD_CHANGED_RECHECK"] if not stable else []
     ) + (
+        ["COMMIT_CHECK_LIST_INCOMPLETE"] if not complete_checks else []
+    ) + (
         ["CI_EXACT_HEAD_NOT_PASS"] if ci != "PASS" else []
     ) + (
-        ["PR_IS_DRAFT"] if after.get("isDraft") is not False else []
+        ["PR_IS_DRAFT"] if after["isDraft"] else []
     ) + (
         ["OPEN_UNMERGED_DRAFT_STACK"] if draft_count else []
     ) + list(external)
@@ -122,11 +185,11 @@ def audit(
         "product": "Tegara",
         "repository": repo,
         "pull_request": pr,
-        "head_sha": new_head if stable else None,
+        "head_sha": old_head if stable else None,
         "github_head_consistent_during_audit": stable,
         "software_ci": ci,
         "required_checks": checked,
-        "ignored_review_checks": ["CodeRabbit"],  # pass can mean skipped
+        "ignored_review_checks": ["CodeRabbit"],  # success can mean skipped
         "open_pull_requests": len(listed),
         "open_draft_pull_requests": draft_count,
         "native_independent_review_and_external_evidence": external,
