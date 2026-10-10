@@ -36,6 +36,12 @@ last-trading-at, quotes after it are invalid.
 
 Files must be ordinary local files, not symlinks. Inputs are limited to
 48MiB and 60,000 observations per scan. Data files must never enter Git.
+The importer opens the checked leaf with O_NOFOLLOW and deliberately fails
+closed when the platform cannot provide that atomic no-follow flag; it does
+not silently substitute an ordinary path-following read. On supported
+platforms, swapping the final CSV name to a symlink immediately before
+open is refused. This does not attest data source licensing or protect
+against malicious processes altering other path components under the same user.
 
 ## Report fields
 
