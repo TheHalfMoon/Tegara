@@ -181,22 +181,32 @@ class TradingViewCSVTests(unittest.TestCase):
         original_open = os.open
 
         def switch_to_link(path, flags, *args, **kwargs):
-            if Path(path) == self.source:
+            if path == self.source.name and "dir_fd" in kwargs:
                 self.source.unlink()
                 self.source.symlink_to(alternate)
             return original_open(path, flags, *args, **kwargs)
 
-        with patch("tegara.tradingview_csv.os.open", side_effect=switch_to_link):
+        with patch("tegara._csv_snapshot.os.open", side_effect=switch_to_link):
             with self.assertRaises(OSError):
                 convert_tradingview(
                     self.source, interval_minutes=1, bar_time_is="open"
                 )
         self.assertTrue(alternate.is_file())
 
+    def test_parent_symlink_refused_before_tradingview_parsing(self):
+        alias = Path(self.tmp.name) / "redirected-parent"
+        alias.symlink_to(Path(self.tmp.name), target_is_directory=True)
+        raw = self.source.read_bytes()
+        with self.assertRaises(OSError):
+            convert_tradingview(
+                alias / self.source.name, interval_minutes=1, bar_time_is="open"
+            )
+        self.assertEqual(self.source.read_bytes(), raw)
+
     def test_symlink_input_rejected(self):
         link = Path(self.tmp.name) / "link.csv"
         link.symlink_to(self.source)
-        with self.assertRaisesRegex(ValueError, "ordinary"):
+        with self.assertRaisesRegex(ValueError, "regular"):
             convert_tradingview(link, interval_minutes=1, bar_time_is="open")
 
 

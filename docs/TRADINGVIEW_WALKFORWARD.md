@@ -32,9 +32,12 @@ The converter supports a strict TradingView-like subset of columns:
     time,open,high,low,close,Volume
 
 The converter reads its source from a single bounded no-follow file
-descriptor snapshot. It refuses a final-component symlink introduced after
-pathname checks, rather than following a substituted CSV between the check and
-the parse. This is not proof of upstream source data licensing.
+descriptor snapshot. It pins every parent directory with O_DIRECTORY and
+O_NOFOLLOW, then opens the leaf relative to that directory descriptor.
+Intermediate-directory or final-component symlink substitutions are refused
+(including swaps after pathname checks), not followed into another CSV.
+Platforms lacking atomic no-follow support fail closed. This is not proof of
+upstream source data licensing or protection from same-uid in-place writes.
 
 The "time" field can contain a 10-digit Unix epoch second, a 13-digit epoch
 millisecond, or timezone-aware ISO-8601 timestamp. An ISO time without timezone
@@ -86,11 +89,13 @@ not validated against an exchange. The tool rejects rows at or after cutoff.
 
 The audit returns content SHA-256s for data and cutoff file plus parameters
 and an explicit status OFFLINE_UNDERLYING_AUDIT_ONLY. No model is loaded.
-The reader takes one bounded, no-follow descriptor snapshot per input CSV,
+The reader takes one bounded, no-follow descriptor snapshot per input CSV
+after descriptor-relative O_DIRECTORY/O_NOFOLLOW checks on all parent paths,
 then calculates SHA-256 and parses OHLCV/cutoff rows from **those same bytes**;
 there is no second pathname read that could attach the wrong digest to a
-changed dataset. This is evidence consistency, not source licensing or a
-claim that concurrent same-user modification of the underlying file cannot
+changed dataset. Intermediate symlinked directories are refused. This is
+evidence consistency, not source licensing or a claim that concurrent
+same-user modification of an already-open file cannot
 occur during a read.
 
 ## Then: optional actual Kronos evaluation
