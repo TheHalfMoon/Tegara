@@ -39,6 +39,9 @@ For an input audit with no hypothetical monetary results, omit the
 - Grid mode requires both axes, strictly comma-separated unique whole
   seconds in [1, 300]; maximum four values per axis, 16 total scenarios.
   Axes are sorted deterministically regardless of user order.
+- Grid mode refuses simultaneous single-scenario --entry-latency-seconds
+  or --exit-latency-seconds inputs instead of silently ignoring them.
+  Only the applied grid axes appear in the resulting parameters.
 - Grid mode only works with delayed execution, the CLI default.
   instant-reference cannot be silently mixed into a latency grid.
 - The full CSV is ingested once with exact-bytes SHA-256 before examining

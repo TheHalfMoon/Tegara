@@ -75,8 +75,10 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--execution-mode", choices=("instant-reference", "delayed"),
                    default="delayed",
                    help="Delayed (default) uses later quote; instant-reference is optimistic and opt-in")
-    p.add_argument("--entry-latency-seconds", type=int, default=1)
-    p.add_argument("--exit-latency-seconds", type=int, default=1)
+    p.add_argument("--entry-latency-seconds", type=int,
+                   help="Single-scenario entry latency, default 1s; incompatible with grid")
+    p.add_argument("--exit-latency-seconds", type=int,
+                   help="Single-scenario exit latency, default 1s; incompatible with grid")
     p.add_argument("--entry-latency-grid",
                    help="Research sensitivity axis: e.g. 1,5,30 (max 4 distinct)")
     p.add_argument("--exit-latency-grid",
@@ -95,10 +97,23 @@ def evaluate(args: argparse.Namespace) -> dict:
         raise ValueError("max-gap-seconds must be between 1 and 3600")
     for field in ("entry_latency_seconds", "exit_latency_seconds"):
         value = getattr(args, field)
-        if type(value) is not int or not 1 <= value <= 300:
+        if value is not None and (
+            type(value) is not int or not 1 <= value <= 300
+        ):
             raise ValueError(f"{field} must be an integer from 1 to 300")
     grid_requested = (args.entry_latency_grid is not None
                       or args.exit_latency_grid is not None)
+    if grid_requested and (
+        args.entry_latency_seconds is not None or
+        args.exit_latency_seconds is not None
+    ):
+        raise ValueError("single-scenario latency flags cannot accompany a grid")
+    single_entry_latency = (
+        args.entry_latency_seconds if args.entry_latency_seconds is not None else 1
+    )
+    single_exit_latency = (
+        args.exit_latency_seconds if args.exit_latency_seconds is not None else 1
+    )
     entry_axis = exit_axis = None
     if grid_requested:
         if (args.entry_latency_grid is None or
@@ -161,8 +176,8 @@ def evaluate(args: argparse.Namespace) -> dict:
     elif args.execution_mode == "delayed":
         result = delayed_long_option(
             ticks, rules, entry_decision_at=entry_not_before,
-            entry_latency=timedelta(seconds=args.entry_latency_seconds),
-            exit_latency=timedelta(seconds=args.exit_latency_seconds),
+            entry_latency=timedelta(seconds=single_entry_latency),
+            exit_latency=timedelta(seconds=single_exit_latency),
             allow_hypothetical=allow_hypothetical,
         )
     elif first is None or (
@@ -215,10 +230,14 @@ def evaluate(args: argparse.Namespace) -> dict:
             "last_trading_at_user_supplied": cutoff.isoformat(),
             "max_gap_seconds": args.max_gap_seconds,
             "execution_mode": args.execution_mode,
-            "entry_latency_seconds": (args.entry_latency_seconds
-                                      if is_delayed else None),
-            "exit_latency_seconds": (args.exit_latency_seconds
-                                     if is_delayed else None),
+            "entry_latency_seconds": (
+                single_entry_latency if is_delayed and not grid_requested else None
+            ),
+            "exit_latency_seconds": (
+                single_exit_latency if is_delayed and not grid_requested else None
+            ),
+            "entry_latency_grid": (list(entry_axis) if grid_requested else None),
+            "exit_latency_grid": (list(exit_axis) if grid_requested else None),
         },
         "hypothetical_pnl_requested": allow_hypothetical,
         "decision_trigger_at": (

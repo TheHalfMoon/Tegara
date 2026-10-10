@@ -334,6 +334,30 @@ class OfflineReplayCLITests(unittest.TestCase):
         self.assertEqual(r["input_quality"]["csv_sha256"],
                          sha256(self.csv.read_bytes()).hexdigest())
 
+    def test_grid_reports_only_actually_applied_latency_settings(self):
+        self.grid_data()
+        p = self.run_cmd("--allow-hypothetical-pnl",
+                         "--entry-latency-grid", "4,1",
+                         "--exit-latency-grid", "2,1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        params = json.loads(p.stdout)["parameters"]
+        self.assertIsNone(params["entry_latency_seconds"])
+        self.assertIsNone(params["exit_latency_seconds"])
+        self.assertEqual(params["entry_latency_grid"], [1, 4])
+        self.assertEqual(params["exit_latency_grid"], [1, 2])
+
+    def test_grid_rejects_ambiguous_single_latency_overrides(self):
+        self.grid_data()
+        for extra in (("--entry-latency-seconds", "1"),
+                      ("--exit-latency-seconds", "5")):
+            with self.subTest(extra=extra):
+                p = self.run_cmd("--allow-hypothetical-pnl",
+                                 "--entry-latency-grid", "1,4",
+                                 "--exit-latency-grid", "1,2", *extra)
+                self.assertEqual(p.returncode, 2)
+                self.assertIn("cannot accompany a grid", p.stderr)
+                self.assertFalse(p.stdout)
+
     def test_grid_cli_no_optin_never_reports_profit(self):
         self.grid_data()
         p = self.run_cmd("--entry-latency-grid", "1,4",
