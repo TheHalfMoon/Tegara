@@ -242,3 +242,16 @@ dotted and adjusted forms supported). Full-width and Cyrillic lookalike
 characters fail closed before calculations or user-declared recording.
 This is not OCC contract symbology or real quote provenance verification.
 See docs/QUOTE_DATA_QUALITY.md.
+
+## Release readiness audit (GOV-P01)
+
+A read-only command reports exact-head Python, TesterArmy and CodeQL
+GitHub checks, open drafts and explicitly unverified external launch
+requirements. Green CI never proves Alibaba OCR, OPRA licensing,
+Derayah order execution or successful phone delivery.
+
+    PYTHONPATH=src python3 scripts/release_gate_audit.py --pr 34 --strict
+
+Strict mode exits 2 for a blocked research-only release. This CLI never
+places trades, sends notifications, edits GitHub or purchases data.
+See docs/RELEASE_GATE_AUDIT.md.
