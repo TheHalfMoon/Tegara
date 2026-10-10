@@ -81,6 +81,12 @@ not validated against an exchange. The tool rejects rows at or after cutoff.
 
 The audit returns content SHA-256s for data and cutoff file plus parameters
 and an explicit status OFFLINE_UNDERLYING_AUDIT_ONLY. No model is loaded.
+The reader takes one bounded, no-follow descriptor snapshot per input CSV,
+then calculates SHA-256 and parses OHLCV/cutoff rows from **those same bytes**;
+there is no second pathname read that could attach the wrong digest to a
+changed dataset. This is evidence consistency, not source licensing or a
+claim that concurrent same-user modification of the underlying file cannot
+occur during a read.
 
 ## Then: optional actual Kronos evaluation
 

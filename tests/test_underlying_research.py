@@ -1,5 +1,6 @@
 """Synthetic date-scoped walk-forward regression tests; no real market data."""
 import csv
+from hashlib import sha256
 import json
 import os
 import subprocess
@@ -8,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tegara.underlying_research import (
     ResearchParameters, load_bars, load_cutoffs, walk_forward, report_json,
@@ -104,6 +106,64 @@ class UnderlyingResearchTests(unittest.TestCase):
         self.assertEqual(len(cutoffs), 3)
         self.assertEqual(len(b), 64)
         self.assertEqual(len(c), 64)
+
+    def test_bar_digest_cannot_refer_to_different_parsed_bytes(self):
+        original = self.path.read_bytes()
+        replacement = original.replace(b",100.5,1000", b",100.8,1000")
+        self.assertNotEqual(original, replacement)
+        real_open = Path.open
+        mutated = []
+
+        def mutate_before_second_path_open(path, *args, **kwargs):
+            # The old implementation hashed via read_bytes() and then
+            # reopened Path.open(newline="") for its CSV parser.
+            if path == self.path and kwargs.get("newline") == "":
+                self.path.write_bytes(replacement)
+                mutated.append(True)
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", mutate_before_second_path_open):
+            bars, digest = load_bars(self.path)
+        self.assertEqual(bars[0].close, __import__("decimal").Decimal("100.5"))
+        self.assertEqual(digest, sha256(original).hexdigest())
+        self.assertFalse(mutated, "loader must not reopen a mutable path")
+
+    def test_cutoff_digest_cannot_refer_to_different_parsed_bytes(self):
+        original = self.cutoff_path.read_bytes()
+        replacement = original.replace(b"T19:30:00", b"T18:30:00")
+        self.assertNotEqual(original, replacement)
+        real_open = Path.open
+        mutated = []
+
+        def mutate_before_second_path_open(path, *args, **kwargs):
+            if path == self.cutoff_path and kwargs.get("newline") == "":
+                self.cutoff_path.write_bytes(replacement)
+                mutated.append(True)
+            return real_open(path, *args, **kwargs)
+
+        with patch.object(Path, "open", mutate_before_second_path_open):
+            cutoffs, digest = load_cutoffs(self.cutoff_path)
+        self.assertEqual(len(cutoffs), 3)
+        self.assertEqual(digest, sha256(original).hexdigest())
+        self.assertFalse(mutated, "cutoff parser must not reopen a mutable path")
+
+    def test_nofollow_csv_rejects_last_moment_symlink_swap(self):
+        innocent = self.path.read_bytes()
+        alternate = Path(self.tmp.name) / "alternate.csv"
+        alternate.write_bytes(innocent.replace(b",100.5,1000", b",100.8,1000"))
+        original_os_open = os.open
+
+        def swap_before_os_open(path, flags, *args, **kwargs):
+            if Path(path) == self.path:
+                self.path.unlink()
+                self.path.symlink_to(alternate)
+            return original_os_open(path, flags, *args, **kwargs)
+
+        with patch("tegara.underlying_research.os.open",
+                   side_effect=swap_before_os_open):
+            with self.assertRaises(OSError):
+                load_bars(self.path)
+        self.assertEqual(alternate.stat().st_size, len(alternate.read_bytes()))
 
     def test_walk_forward_only_latest_reserved_session_and_baseline(self):
         bars, cutoffs, _, _ = self.parsed()
