@@ -37,16 +37,16 @@ def _safe_existing_db(path: str | Path) -> Path:
     if not isinstance(path, (str, Path)) or str(path) in ("", ":memory:"):
         raise ValueError("an existing on-disk SQLite database is required")
     raw = Path(path).expanduser().absolute()
-    # macOS legitimately aliases /var -> /private/var for temp directories.
-    # Canonicalize parent directories while rejecting a database *file*
-    # that is itself a symlink. A nonexistent DB must never be created.
-    if raw.is_symlink():
-        raise ValueError("SQLite audit database file symlinks are refused")
+    # Resolve ONLY the parent (macOS aliases /var -> /private/var).
+    # Do not resolve the final component: O_NOFOLLOW must see any symlink
+    # swapped into place between this metadata check and atomic os.open.
     try:
-        p = raw.resolve(strict=True)
-        st = p.stat()
+        p = raw.parent.resolve(strict=True) / raw.name
+        st = p.lstat()
     except OSError as exc:
         raise ValueError("SQLite audit database is unavailable") from exc
+    if stat.S_ISLNK(st.st_mode):
+        raise ValueError("SQLite audit database file symlinks are refused")
     if not stat.S_ISREG(st.st_mode):
         raise ValueError("SQLite audit requires an existing regular database file")
     if st.st_size > MAX_DB_BYTES:
@@ -207,8 +207,12 @@ def read_outbox_audit(
                         or clock >= _timestamp(expiry)
                         or clock >= _timestamp(cutoff)):
                     expired_claims += 1
-            if status == "ACCEPTED_BY_PROVIDER" and row["ack_notice"] is None:
-                raise ValueError("provider-accepted state lacks ACK evidence")
+            if status in ("ACCEPTED_BY_PROVIDER", "PROVIDER_ACCEPTED_TOO_LATE"):
+                if row["ack_notice"] is None:
+                    raise ValueError("provider-accepted state lacks ACK evidence")
+                expected = 1 if status == "ACCEPTED_BY_PROVIDER" else 0
+                if row["ack_timely"] != expected:
+                    raise ValueError("provider state contradicts ACK timeliness")
         conn.rollback()
     unack = unconfirmed
     return {

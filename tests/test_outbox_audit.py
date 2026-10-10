@@ -219,6 +219,48 @@ class ReadOnlyOutboxAuditTests(unittest.TestCase):
             self.audit()
         sidecar.unlink()
 
+    def test_provider_accepted_too_late_without_ack_fails_closed(self):
+        self.queue()
+        self.store.db.execute(
+            "UPDATE outbox SET state='PROVIDER_ACCEPTED_TOO_LATE'"
+        )
+        with self.assertRaisesRegex(ValueError, "lacks ACK"):
+            self.audit()
+
+    def test_provider_ack_timeliness_must_match_recorded_state(self):
+        notice = self.queue()
+        claim = self.store.revalidation_candidates(
+            "position-secret", now=self.t,
+            max_quote_age=timedelta(seconds=3), last_trading_at=self.cutoff,
+        )[0]
+        self.store.record_provider_acceptance(
+            notice, claim_token=claim["claim_token"],
+            accepted_at=self.t + timedelta(seconds=1),
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.cutoff, provider_accepted=True,
+            provider_receipt_id="ack-only",
+        )
+        self.store.db.execute(
+            "UPDATE outbox SET state='PROVIDER_ACCEPTED_TOO_LATE'"
+        )
+        with self.assertRaisesRegex(ValueError, "contradicts"):
+            self.audit(seconds=2)
+
+    def test_symlink_swap_between_metadata_and_open_is_rejected(self):
+        other = Path(self.tmp.name) / "moved.sqlite"
+        native_lstat = Path.lstat
+
+        def swap_after_lstat(path):
+            info = native_lstat(path)
+            if path.name == "positions.sqlite" and not other.exists():
+                self.path.rename(other)
+                self.path.symlink_to(other)
+            return info
+
+        with patch.object(Path, "lstat", autospec=True, side_effect=swap_after_lstat):
+            with self.assertRaises(OSError):
+                self.audit()
+
     def test_cli_strict_nonzero_unacknowledged_and_no_mutation(self):
         self.queue()
         self.store.revalidation_candidates(
