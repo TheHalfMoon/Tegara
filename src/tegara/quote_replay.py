@@ -87,7 +87,7 @@ def replay_long_option(
     asserts data provenance approval; that assertion is not independently
     verified here. The result always remains a hypothetical simulation.
     """
-    if not provenance_approved:
+    if provenance_approved is not True:
         return ReplayResult(ReplayOutcome.UNQUALIFIED_DATA)
     if not ticks:
         return ReplayResult(ReplayOutcome.NO_ENTRY_LIQUIDITY)

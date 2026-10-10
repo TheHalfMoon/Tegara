@@ -37,6 +37,13 @@ class QuoteReplayTests(unittest.TestCase):
         self.assertEqual(r.outcome, ReplayOutcome.UNQUALIFIED_DATA)
         self.assertIsNone(r.simulated_net_pnl)
 
+    def test_truthy_nonboolean_provenance_does_not_unlock_pnl(self):
+        r = replay_long_option([self.tick(0, "1.18", "1.20"),
+                                 self.tick(3, "1.62")], self.rules,
+                               provenance_approved="yes")
+        self.assertEqual(r.outcome, ReplayOutcome.UNQUALIFIED_DATA)
+        self.assertIsNone(r.simulated_net_pnl)
+
     def test_target_exit_uses_ask_for_buy_bid_for_sell_and_fees(self):
         r = replay_long_option([self.tick(0, "1.18", "1.20"),
                                  self.tick(3, "1.62")], self.rules,
