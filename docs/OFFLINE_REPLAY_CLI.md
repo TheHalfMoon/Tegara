@@ -19,6 +19,7 @@ input data quality, options Bid/Ask simulation assumptions, and limitations.
       --entry-fee 2.29 --exit-fee 2.29 \
       --entry-slippage 0.01 --exit-slippage 0.02 \
       --target-net-profit 35 --max-net-loss 50 \
+      --entry-not-before 2026-10-09T14:30:00+00:00 \
       --deadline 2026-10-09T14:40:00+00:00 \
       --last-trading-at 2026-10-09T20:00:00+00:00 \
       --max-gap-seconds 300
@@ -40,7 +41,12 @@ This is ONLY consent to model hypothetical outcomes; it is not evidence
 of data feed rights, OPRA provenance, marketability, or actual fills.
 Even after the flag, any INDICATIVE quote results in UNQUALIFIED_DATA.
 Insufficient Ask size, stale-data gaps, and missing exit evidence do not
-produce fabricated monetary returns.
+produce fabricated monetary returns. An explicit entry-not-before timestamp
+is REQUIRED so the backtest does not silently buy at the CSV's arbitrary
+first quote. Entry uses the first quote at or after the supplied timestamp,
+but will ABSTAIN with NO_ENTRY_EVIDENCE if that quote is too far away
+(more than --max-gap-seconds). The user-provided entry time itself is not
+evidence of a broker purchase or an option market order.
 
 ## CSV input
 

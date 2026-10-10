@@ -15,7 +15,7 @@ import sys
 
 from .core import OptionContract
 from .quote_import import read_option_csv
-from .quote_replay import ReplayRules, replay_long_option
+from .quote_replay import ReplayOutcome, ReplayResult, ReplayRules, replay_long_option
 
 STATUS = "RESEARCH_ONLY_NOT_LIVE_TRADING"
 
@@ -64,6 +64,8 @@ def parser() -> argparse.ArgumentParser:
                    help="Total hypothetical USD net profit over all contracts")
     p.add_argument("--max-net-loss", required=True,
                    help="Total hypothetical USD loss threshold; not guaranteed stop fill")
+    p.add_argument("--entry-not-before", required=True,
+                   help="Earliest permitted entry decision timestamp, with UTC offset")
     p.add_argument("--deadline", required=True, help="Time with UTC offset")
     p.add_argument("--last-trading-at", required=True,
                    help="Contract-specific cutoff; user-provided, NOT venue verified")
@@ -82,6 +84,9 @@ def evaluate(args: argparse.Namespace) -> dict:
         raise ValueError("max-gap-seconds must be between 1 and 3600")
     deadline = aware_time(args.deadline)
     cutoff = aware_time(args.last_trading_at)
+    entry_not_before = aware_time(args.entry_not_before)
+    if entry_not_before >= min(deadline, cutoff):
+        raise ValueError("entry-not-before must be earlier than both exit deadline and cutoff")
     rules = ReplayRules(
         contract=contract,
         quantity=args.quantity,
@@ -104,9 +109,30 @@ def evaluate(args: argparse.Namespace) -> dict:
     # Even when true, the flag is ONLY user consent to inspect hypothetical
     # P&L, never proof of license, NBBO provenance or executable liquidity.
     allow_hypothetical = args.allow_hypothetical_pnl is True
-    result = replay_long_option(
-        ticks, rules, provenance_approved=allow_hypothetical,
-    )
+    # Always preserve full-file quality diagnostics, but only offer quote
+    # observations known at/after the user's explicit entry decision.
+    available = [
+        tick for tick in ticks if tick.quote.observed_at >= entry_not_before
+    ]
+    first = available[0] if available else None
+    if first is None or (
+        first.quote.observed_at - entry_not_before > rules.max_quote_gap
+    ):
+        result = ReplayResult(
+            ReplayOutcome.NO_ENTRY_EVIDENCE,
+            note="No promptly observable quote after the explicit entry start",
+        )
+    else:
+        result = replay_long_option(
+            available, rules, provenance_approved=allow_hypothetical,
+        )
+    # Abstention due to unapproved data takes precedence even when there
+    # were no entry quotes in the requested window.
+    if not allow_hypothetical:
+        result = ReplayResult(
+            ReplayOutcome.UNQUALIFIED_DATA,
+            note="Hypothetical monetary replay was not explicitly requested",
+        )
     return {
         "status": STATUS,
         "input_quality": quality.as_dict(),
@@ -125,6 +151,7 @@ def evaluate(args: argparse.Namespace) -> dict:
             "exit_slippage_per_share": str(rules.exit_slippage_per_share),
             "target_net_profit_usd": str(rules.target_net_profit),
             "maximum_net_loss_usd": str(rules.maximum_net_loss),
+            "entry_not_before": entry_not_before.isoformat(),
             "deadline": deadline.isoformat(),
             "last_trading_at_user_supplied": cutoff.isoformat(),
             "max_gap_seconds": args.max_gap_seconds,

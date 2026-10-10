@@ -50,6 +50,7 @@ class OfflineReplayCLITests(unittest.TestCase):
             "--entry-fee", "2.29", "--exit-fee", "2.29",
             "--entry-slippage", "0", "--exit-slippage", "0",
             "--target-net-profit", "35", "--max-net-loss", "50",
+            "--entry-not-before", "2026-10-09T14:30:00+00:00",
             "--deadline", "2026-10-09T14:40:00+00:00",
             "--last-trading-at", "2026-10-09T20:00:00+00:00",
             "--max-gap-seconds", "300",
@@ -116,6 +117,29 @@ class OfflineReplayCLITests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(json.loads(result.stdout)["outcome"], "NO_EXIT_EVIDENCE")
         self.assertIsNone(json.loads(result.stdout)["hypothetical_net_pnl_usd"])
+
+    def test_explicit_entry_window_excludes_earlier_quotes(self):
+        result = self.run_cmd("--allow-hypothetical-pnl",
+                              change={"--entry-not-before": "2026-10-09T14:31:00+00:00"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["outcome"], "NO_EXIT_EVIDENCE")
+        self.assertEqual(out["entry_premium"], "1.65")
+        self.assertIsNone(out["hypothetical_net_pnl_usd"])
+
+    def test_no_prompt_entry_quote_abstains(self):
+        result = self.run_cmd("--allow-hypothetical-pnl",
+                              change={"--entry-not-before": "2026-10-09T14:39:00+00:00"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["outcome"], "NO_ENTRY_EVIDENCE")
+        self.assertIsNone(out["hypothetical_net_pnl_usd"])
+
+    def test_entry_after_deadline_is_rejected(self):
+        result = self.run_cmd("--allow-hypothetical-pnl",
+                              change={"--entry-not-before": "2026-10-09T14:41:00+00:00"})
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("earlier than", result.stderr)
 
     def test_missing_ask_liquidity_abstains(self):
         self.rows[0]["ask_size"] = "0"
