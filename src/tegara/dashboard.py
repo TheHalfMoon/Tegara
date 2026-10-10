@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import date
-from decimal import Decimal, InvalidOperation, ROUND_CEILING
+from decimal import Decimal, DecimalException, InvalidOperation, ROUND_CEILING
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -66,8 +66,10 @@ def calculate_payload(payload: dict) -> dict[str, str]:
         d("entry_fee_per_contract"), d("exit_fee_per_contract"),
     )
     tick = d("tick")
-    if tick <= 0:
-        raise ValueError("tick must be positive")
+    # Option tick sizes must be bounded before dividing by tick: a hostile
+    # decimal exponent can otherwise raise decimal.Overflow in HTTP handler.
+    if not Decimal("0.00000001") <= tick <= Decimal("1000000"):
+        raise ValueError("tick must be within 0.00000001..1000000")
     kind = payload["target_kind"]
     if kind == "NET_PROFIT_USD":
         raw_target = minimum_bid_for_net_profit(position, d("target_value"))
@@ -175,7 +177,8 @@ def make_handler():
             try:
                 body = json.loads(self.rfile.read(length))
                 result = calculate_payload(body)
-            except (ValueError, TypeError, json.JSONDecodeError, OverflowError) as exc:
+            except (ValueError, TypeError, json.JSONDecodeError,
+                    OverflowError, DecimalException) as exc:
                 self._json(422, {"error": str(exc)})
                 return
             self._json(200, result)

@@ -60,6 +60,20 @@ class TargetPayloadTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     calculate_payload(body)
 
+    def test_extreme_tick_exponents_rejected_as_user_input(self):
+        for value in ("1e-999999999", "1e-99999", "1e-9", "1e1000000"):
+            with self.subTest(tick=value):
+                payload = example()
+                payload["tick"] = value
+                with self.assertRaisesRegex(ValueError, "tick must be within"):
+                    calculate_payload(payload)
+
+    def test_bounded_tick_still_supported(self):
+        body = example()
+        body["tick"] = "0.00000001"
+        result = calculate_payload(body)
+        self.assertEqual(result["status"], "HYPOTHETICAL_RESEARCH_ONLY")
+
     def test_zero_quantity_and_multiplier_rejected(self):
         for field in ("quantity", "multiplier"):
             body = example()
@@ -135,6 +149,20 @@ class LoopbackWebTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as ctx:
             urlopen(req, timeout=3)
         self.assertEqual(ctx.exception.code, 422)
+
+    def test_extreme_tick_returns_json_422_instead_of_disconnect(self):
+        body = example()
+        body["tick"] = "1e-999999999"
+        req = Request(
+            self.url + "/api/target",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json",
+                     "Origin": self.url},
+        )
+        with self.assertRaises(HTTPError) as ctx:
+            urlopen(req, timeout=3)
+        self.assertEqual(ctx.exception.code, 422)
+        self.assertIn("tick must be within", json.load(ctx.exception)["error"])
 
     def test_no_broker_trade_api(self):
         req = Request(

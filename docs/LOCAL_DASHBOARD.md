@@ -21,7 +21,7 @@ It displays initial debit, theoretical bid threshold, rounded bid target, and es
 ## Security and data boundaries
 
 - The Python HTTP listener binds only to 127.0.0.1. Accepted Host and POST Origin values must match its local port. There is no external network dependency.
-- JSON POST payloads are limited to 16 KiB and an exact documented field set. Unknown fields are rejected. Values are parsed using Decimal, not floating-point arithmetic.
+- JSON POST payloads are limited to 16 KiB and an exact documented field set. Unknown fields are rejected. Values are parsed using Decimal, not floating-point arithmetic. Tick inputs must be bounded within 0.00000001 to 1000000: extreme decimal exponents can overflow rounding arithmetic. Invalid values return a controlled JSON HTTP 422 rather than disconnecting the request. These are implementation bounds, not exchange-approved contract increments.
 - No brokerage credentials, cloud analytics, account numbers, market-quote adapters, trading endpoints, websocket market streams or polling workers exist.
 - CSP blocks remote scripts, forms, fonts and images; static CSS/JS is served from the package itself. Requests are never logged with financial details.
 - The app has no authentication because it is strictly an offline local prototype. It should not be published or exposed via a public tunnel in its current state.
