@@ -64,3 +64,14 @@ To run the free, model-less TesterArmy browser e2e tests:
     E2E_TELEMETRY_DISABLED=1 npm run test:e2e -- --workers 1
 
 See docs/LOCAL_DASHBOARD.md for the security and data limitations.
+
+## TradingView Premium baseline scripts (TV-P01, uncompiled prototypes)
+
+The tradingview folder contains Pine v6 underlying-only opening-range/VWAP
+research indicator and Strategy Tester scripts. Script compilation in the
+TradingView Pine Editor and actual platform alert delivery are unverified.
+They contain no option pricing, no Derayah integration and no executable
+Sell-to-Close contract signal. The strategy's financial performance is ONLY
+the underlying proxy, not option P&L.
+
+See docs/TRADINGVIEW_BASELINE.md for manual compile/verification steps.
