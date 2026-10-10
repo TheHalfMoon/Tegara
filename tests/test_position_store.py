@@ -48,6 +48,15 @@ class PositionStoreTests(unittest.TestCase):
         if os.name == "posix":
             self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
 
+    def test_direct_position_store_refuses_symlink_database(self):
+        victim = Path(self.tmp.name) / "unrelated-file.txt"
+        victim.write_text("keep intact", encoding="utf-8")
+        link = Path(self.tmp.name) / "external-db-link"
+        link.symlink_to(victim)
+        with self.assertRaisesRegex(ValueError, "symlinks are refused"):
+            PositionStore(link)
+        self.assertEqual(victim.read_text(encoding="utf-8"), "keep intact")
+
     def test_existing_database_permissions_hardened_on_reopen(self):
         if os.name == "posix":
             os.chmod(self.path, 0o644)
