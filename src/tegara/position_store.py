@@ -14,6 +14,7 @@ from pathlib import Path
 import os
 import sqlite3
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from .core import (
     AlertStatus, LongOptionPosition, OptionContract, OptionQuote, assess_profit_target
@@ -292,12 +293,91 @@ class PositionStore:
         )
         return [dict(row) for row in rows]
 
-    def mark_delivered(self, notice_id: str) -> None:
-        """Only call after a real notification provider reports successful receipt."""
+    def revalidation_candidates(
+        self, key: str, *, now: datetime, max_quote_age: timedelta,
+        last_trading_at: datetime | None,
+    ) -> list[dict[str, str]]:
+        """Expire old outbox items before a separate fresh-quote reassessment.
+
+        Returned rows are NOT approved for delivery. They are candidates for a
+        notifier to re-verify against a *new* trusted quote and open position;
+        this method does not send anything or claim a still-sellable Bid.
+        """
+        present = stamp(now)
+        if not isinstance(max_quote_age, timedelta) or max_quote_age <= timedelta(0):
+            raise ValueError("max_quote_age must be positive")
+        if last_trading_at is None:
+            return []  # fail closed if venue cutoff is unknown
+        cutoff = stamp(last_trading_at)
         with self._transaction():
-            updated = self.db.execute(
-                "UPDATE outbox SET state='DELIVERED' WHERE id=? AND state='PENDING'",
-                (notice_id,)
-            )
-            if updated.rowcount != 1:
+            snap = self.get(key)
+            if last_trading_at.astimezone(
+                ZoneInfo("America/New_York")
+            ).date() != snap.contract.expiration:
+                raise ValueError("cutoff must be on the contract NY expiry date")
+            rows = self.db.execute(
+                "SELECT * FROM outbox WHERE position_id=? AND state='PENDING' "
+                "ORDER BY created_at, id", (key,)
+            ).fetchall()
+            valid = []
+            for row in rows:
+                quote_at = datetime.fromisoformat(row["quote_at"])
+                age = now - quote_at
+                if (snap.status is PositionStatus.CLOSED
+                        or present >= cutoff or age < timedelta(0)
+                        or age > max_quote_age):
+                    self.db.execute(
+                        "UPDATE outbox SET state='INVALIDATED_STALE' WHERE id=?",
+                        (row["id"],),
+                    )
+                else:
+                    valid.append(dict(row))
+            return valid
+
+    def record_provider_acceptance(
+        self, notice_id: str, *, accepted_at: datetime,
+        max_quote_age: timedelta, last_trading_at: datetime | None,
+        provider_accepted: bool,
+    ) -> bool:
+        """Record a verified transport ACK, not a human receipt or brokerage fill.
+
+        A caller must *first* independently reassess a fresh matching option
+        quote. This method enforces the latest known time/position cutoff but
+        cannot verify the provider response or current market data itself.
+        """
+        stamp(accepted_at)
+        if provider_accepted is not True:
+            raise ValueError("actual provider acceptance must be explicitly confirmed")
+        if (not isinstance(max_quote_age, timedelta)
+                or max_quote_age <= timedelta(0)):
+            raise ValueError("max_quote_age must be positive")
+        if last_trading_at is None:
+            raise ValueError("contract cutoff unknown; cannot accept notification")
+        cutoff = stamp(last_trading_at)
+        with self._transaction():
+            row = self.db.execute(
+                "SELECT * FROM outbox WHERE id=? AND state='PENDING'",
+                (notice_id,),
+            ).fetchone()
+            if row is None:
                 raise KeyError(notice_id)
+            snap = self.get(row["position_id"])
+            if last_trading_at.astimezone(
+                ZoneInfo("America/New_York")
+            ).date() != snap.contract.expiration:
+                raise ValueError("cutoff must be on NY expiry date")
+            quote_at = datetime.fromisoformat(row["quote_at"])
+            age = accepted_at - quote_at
+            if (snap.status is PositionStatus.CLOSED or
+                    stamp(accepted_at) >= cutoff or
+                    age < timedelta(0) or age > max_quote_age):
+                self.db.execute(
+                    "UPDATE outbox SET state='INVALIDATED_STALE' WHERE id=?",
+                    (notice_id,),
+                )
+                return False
+            self.db.execute(
+                "UPDATE outbox SET state='ACCEPTED_BY_PROVIDER' WHERE id=?",
+                (notice_id,),
+            )
+            return True

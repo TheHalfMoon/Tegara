@@ -101,3 +101,16 @@ The last trading cutoff above is ILLUSTRATIVE and must be independently verified
 per contract and venue. The resulting report ALWAYS labels licensing and OPRA
 provenance as NOT_INDEPENDENTLY_VERIFIED and live_eligible=false. See
 docs/QUOTE_DATA_QUALITY.md. No quote feed or broker access is included.
+
+## Sell notification outbox safety (NT-P01)
+
+The local SQLite position manager includes an explicit pre-delivery
+revalidation gate for pending option target alerts. A pending alert is NOT a
+market order and not proof that an option can still be sold at the quoted Bid.
+Stale, expired, unknown-cutoff and manually closed alerts are suppressed.
+
+A provider acknowledgment is recorded distinctly as ACCEPTED_BY_PROVIDER;
+it does not represent push delivery to a phone, a human reading an alert or a
+Derayah broker execution. No notification provider is connected yet.
+
+See docs/NOTIFICATION_OUTBOX.md.

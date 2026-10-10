@@ -97,7 +97,12 @@ class PositionStoreTests(unittest.TestCase):
         )
         self.assertEqual(self.store.pending("entry-1"), [])
         with self.assertRaises(KeyError):
-            self.store.mark_delivered(notice.notification_id)
+            self.store.record_provider_acceptance(
+                notice.notification_id, accepted_at=self.now,
+                max_quote_age=timedelta(seconds=3),
+                last_trading_at=self.now + timedelta(hours=5),
+                provider_accepted=True,
+            )
         # A fresh contract-matching quote is needed for the remaining quantity.
         newer = self.check(self.quote(offset=1), offset=1)
         self.assertEqual(newer.decision, MonitorDecision.TARGET_NOT_REACHED)
@@ -165,7 +170,12 @@ class PositionStoreTests(unittest.TestCase):
 
     def test_delivered_notification_does_not_close_position(self):
         a = self.check(self.quote())
-        self.store.mark_delivered(a.notification_id)
+        self.store.record_provider_acceptance(
+            a.notification_id, accepted_at=self.now,
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.now + timedelta(hours=5),
+            provider_accepted=True,
+        )
         self.assertEqual(self.store.pending("entry-1"), [])
         self.assertEqual(self.store.get("entry-1").open_quantity, 3)
 
@@ -201,9 +211,130 @@ class PositionStoreTests(unittest.TestCase):
         self.assertEqual(expired.decision, MonitorDecision.AFTER_CUTOFF)
         self.assertEqual(self.store.pending("entry-1"), [])
 
+    def test_provider_acceptance_requires_actual_explicit_ack(self):
+        a = self.check(self.quote())
+        with self.assertRaisesRegex(ValueError, "provider acceptance"):
+            self.store.record_provider_acceptance(
+                a.notification_id, accepted_at=self.now,
+                max_quote_age=timedelta(seconds=3),
+                last_trading_at=self.now + timedelta(hours=5),
+                provider_accepted=False,
+            )
+        self.assertEqual(len(self.store.pending("entry-1")), 1)
+
+    def test_provider_acceptance_requires_cutoff(self):
+        a = self.check(self.quote())
+        with self.assertRaisesRegex(ValueError, "cutoff unknown"):
+            self.store.record_provider_acceptance(
+                a.notification_id, accepted_at=self.now,
+                max_quote_age=timedelta(seconds=3),
+                last_trading_at=None,
+                provider_accepted=True,
+            )
+        self.assertEqual(len(self.store.pending("entry-1")), 1)
+
+    def test_late_provider_ack_is_recorded_as_stale_not_delivered(self):
+        a = self.check(self.quote())
+        result = self.store.record_provider_acceptance(
+            a.notification_id, accepted_at=self.now + timedelta(seconds=5),
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.now + timedelta(hours=5),
+            provider_accepted=True,
+        )
+        self.assertFalse(result)
+        self.assertEqual(self.store.pending("entry-1"), [])
+        row = self.store.db.execute("SELECT state FROM outbox WHERE id=?",
+                                    (a.notification_id,)).fetchone()
+        self.assertEqual(row["state"], "INVALIDATED_STALE")
+
+    def test_provider_ack_does_not_claim_phone_receipt_or_fill(self):
+        a = self.check(self.quote())
+        accepted = self.store.record_provider_acceptance(
+            a.notification_id, accepted_at=self.now + timedelta(seconds=1),
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.now + timedelta(hours=5),
+            provider_accepted=True,
+        )
+        self.assertTrue(accepted)
+        state = self.store.db.execute("SELECT state FROM outbox WHERE id=?",
+                                      (a.notification_id,)).fetchone()["state"]
+        self.assertEqual(state, "ACCEPTED_BY_PROVIDER")
+        self.assertEqual(self.store.get("entry-1").open_quantity, 3)
+
+    def test_outbox_revalidation_lists_fresh_candidates_without_delivering(self):
+        alert = self.check(self.quote())
+        candidates = self.store.revalidation_candidates(
+            "entry-1", now=self.now + timedelta(seconds=1),
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.now + timedelta(hours=5),
+        )
+        self.assertEqual([c["id"] for c in candidates], [alert.notification_id])
+        self.assertEqual(len(self.store.pending("entry-1")), 1)
+        self.assertEqual(self.store.get("entry-1").open_quantity, 3)
+
+    def test_outbox_revalidation_expires_stale_alert(self):
+        alert = self.check(self.quote())
+        candidates = self.store.revalidation_candidates(
+            "entry-1", now=self.now + timedelta(seconds=4),
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.now + timedelta(hours=5),
+        )
+        self.assertEqual(candidates, [])
+        self.assertEqual(self.store.pending("entry-1"), [])
+        with self.assertRaises(KeyError):
+            self.store.record_provider_acceptance(
+                alert.notification_id, accepted_at=self.now,
+                max_quote_age=timedelta(seconds=3),
+                last_trading_at=self.now + timedelta(hours=5),
+                provider_accepted=True,
+            )
+
+    def test_outbox_revalidation_expires_at_cutoff(self):
+        self.check(self.quote())
+        candidates = self.store.revalidation_candidates(
+            "entry-1", now=self.now + timedelta(seconds=1),
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.now + timedelta(milliseconds=1),
+        )
+        self.assertEqual(candidates, [])
+        self.assertEqual(self.store.pending("entry-1"), [])
+
+    def test_outbox_revalidation_without_cutoff_fails_closed(self):
+        alert = self.check(self.quote())
+        result = self.store.revalidation_candidates(
+            "entry-1", now=self.now, max_quote_age=timedelta(seconds=3),
+            last_trading_at=None,
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(self.store.pending("entry-1")[0]["id"], alert.notification_id)
+
+    def test_future_dated_pending_alert_invalidated(self):
+        self.check(self.quote())
+        result = self.store.revalidation_candidates(
+            "entry-1", now=self.now - timedelta(seconds=1),
+            max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.now + timedelta(hours=5),
+        )
+        self.assertEqual(result, [])
+        self.assertEqual(self.store.pending("entry-1"), [])
+
+    def test_outbox_revalidation_wrong_expiry_cutoff_fails(self):
+        self.check(self.quote())
+        with self.assertRaisesRegex(ValueError, "NY expiry"):
+            self.store.revalidation_candidates(
+                "entry-1", now=self.now,
+                max_quote_age=timedelta(seconds=3),
+                last_trading_at=self.now + timedelta(days=2),
+            )
+
     def test_unknown_notice_rejected(self):
         with self.assertRaises(KeyError):
-            self.store.mark_delivered("not-a-real-notification")
+            self.store.record_provider_acceptance(
+                "not-a-real-notification", accepted_at=self.now,
+                max_quote_age=timedelta(seconds=3),
+                last_trading_at=self.now + timedelta(hours=5),
+                provider_accepted=True,
+            )
 
     def test_bad_naive_entry_rejected(self):
         with self.assertRaises(ValueError):
