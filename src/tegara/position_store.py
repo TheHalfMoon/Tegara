@@ -97,7 +97,13 @@ class PositionStore:
         location = str(path)
         if location != ":memory:":
             p = Path(location)
+            if p.is_symlink():
+                raise ValueError("SQLite position database symlinks are refused")
             p.parent.mkdir(parents=True, exist_ok=True)
+            if p.is_symlink():
+                raise ValueError("SQLite position database symlinks are refused")
+            if p.exists() and not p.is_file():
+                raise ValueError("SQLite position database must be a regular file")
             if p.exists():
                 os.chmod(location, 0o600)
         self.db = sqlite3.connect(location, isolation_level=None, timeout=10)

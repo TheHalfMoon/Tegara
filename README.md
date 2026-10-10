@@ -191,3 +191,10 @@ JavaScript/TypeScript (security-extended rules). A successful CodeQL scan
 does NOT replace the mandatory independent Alibaba OpenCodeReview,
 real-world market-data qualification, or options execution testing.
 See docs/CODEQL_SECURITY.md.
+
+
+## Local user-declared options journal (JN-P01)
+
+A separate SQLite terminal tool lets you manually enter a long-option position, inspect its remaining quantity and manually recorded P&L, record a user-declared sell-to-close fill, and list those fill records. Every report is labeled USER_DECLARED_UNVERIFIED and broker_execution_verified=false. Database writes require --record-only and paths inside the repo or symlinked SQLite files are rejected. The tool is offline: it cannot authenticate with Derayah Global, verify trade statements or submit orders.
+
+See docs/MANUAL_JOURNAL.md for complete commands, safety boundaries and test evidence.
