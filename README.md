@@ -163,3 +163,13 @@ This test never sends a phone/OS notification or places broker orders.
 It also checks unverified feeds and missing session cutoffs fail closed.
 
 See docs/SYNTHETIC_JOURNEY.md for exactly what this evidence does/not prove.
+
+## US option market data and broker integration gates
+
+Read docs/MARKET_DATA_QUALIFICATION.md before selecting a data provider.
+Existing TradingView Premium and Derayah Global access DO NOT independently
+establish exportable live OPRA feed rights. In particular TradingView's
+broker-entitlement verification table currently lists Derayah for TADAWUL,
+not OPRA. The optional Cboe quote-interval product is a licensed market
+data purchase, not a free live price stream. Do not buy any additional
+subscription or enable execution without a separate explicit authorization.
