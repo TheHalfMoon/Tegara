@@ -154,16 +154,53 @@ class UnderlyingResearchTests(unittest.TestCase):
         original_os_open = os.open
 
         def swap_before_os_open(path, flags, *args, **kwargs):
-            if Path(path) == self.path:
+            if path == self.path.name and "dir_fd" in kwargs:
                 self.path.unlink()
                 self.path.symlink_to(alternate)
             return original_os_open(path, flags, *args, **kwargs)
 
-        with patch("tegara.underlying_research.os.open",
+        with patch("tegara._csv_snapshot.os.open",
                    side_effect=swap_before_os_open):
             with self.assertRaises(OSError):
                 load_bars(self.path)
         self.assertEqual(alternate.stat().st_size, len(alternate.read_bytes()))
+
+    def test_intermediate_parent_symlink_rejected_for_bars_and_cutoffs(self):
+        redirected = Path(self.tmp.name) / "parent-alias"
+        redirected.symlink_to(Path(self.tmp.name), target_is_directory=True)
+        bar_bytes = self.path.read_bytes()
+        cutoff_bytes = self.cutoff_path.read_bytes()
+        with self.assertRaises(OSError):
+            load_bars(redirected / self.path.name)
+        with self.assertRaises(OSError):
+            load_cutoffs(redirected / self.cutoff_path.name)
+        self.assertEqual(self.path.read_bytes(), bar_bytes)
+        self.assertEqual(self.cutoff_path.read_bytes(), cutoff_bytes)
+
+    def test_parent_component_symlink_swap_during_open_is_refused(self):
+        root = Path(self.tmp.name)
+        parent = root / "bars-parent"
+        parent.mkdir()
+        (parent / self.path.name).write_bytes(self.path.read_bytes())
+        decoy = root / "decoy"
+        decoy.mkdir()
+        decoy_bytes = self.path.read_bytes().replace(b"100.5", b"200.5")
+        (decoy / self.path.name).write_bytes(decoy_bytes)
+        original_open = os.open
+        moved = []
+
+        def inject_swap(component, flags, *args, **kwargs):
+            if component == parent.name and not moved:
+                parent.rename(root / "pinned-real")
+                parent.symlink_to(decoy, target_is_directory=True)
+                moved.append(True)
+            return original_open(component, flags, *args, **kwargs)
+
+        with patch("tegara._csv_snapshot.os.open", side_effect=inject_swap):
+            with self.assertRaises(OSError):
+                load_bars(parent / self.path.name)
+        self.assertTrue(moved)
+        self.assertEqual((decoy / self.path.name).read_bytes(), decoy_bytes)
 
     def test_walk_forward_only_latest_reserved_session_and_baseline(self):
         bars, cutoffs, _, _ = self.parsed()

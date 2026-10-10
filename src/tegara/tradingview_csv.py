@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from ._csv_snapshot import read_csv_snapshot
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import csv
 from io import BytesIO, TextIOWrapper
-import os
 import re
-import stat
 import sys
 
 SOURCE_HEADER = ("time", "open", "high", "low", "close", "Volume")
@@ -61,21 +61,9 @@ def convert_tradingview(
         raise ValueError("only 1- or 5-minute candles are supported")
     if bar_time_is not in ("open", "close"):
         raise ValueError("bar_time_is must be explicitly set to open or close")
-    p = Path(path)
-    if p.is_symlink() or not p.is_file():
-        raise ValueError("input must be ordinary CSV <=32MiB")
-    if not hasattr(os, "O_NOFOLLOW"):
-        raise ValueError("no-follow CSV opening unavailable")
-    # Snapshot a bounded, regular input descriptor. Never trust a pathname
-    # check followed by a second symlink-following open.
-    fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW
-                 | getattr(os, "O_NONBLOCK", 0))
-    with os.fdopen(fd, "rb") as source:
-        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
-            raise ValueError("input must be a regular file")
-        raw = source.read(MAX_SOURCE + 1)
-    if len(raw) > MAX_SOURCE:
-        raise ValueError("input CSV exceeds 32MiB")
+    # A bounded source snapshot must refuse parent as well as leaf symlink
+    # substitution before any candle parsing or timestamp transformation.
+    raw = read_csv_snapshot(path, MAX_SOURCE)
     out = []
     prev: datetime | None = None
     with TextIOWrapper(BytesIO(raw), encoding="utf-8-sig", newline="") as f:
