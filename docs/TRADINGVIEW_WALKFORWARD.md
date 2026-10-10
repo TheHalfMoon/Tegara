@@ -31,6 +31,11 @@ The converter supports a strict TradingView-like subset of columns:
 
     time,open,high,low,close,Volume
 
+The converter reads its source from a single bounded no-follow file
+descriptor snapshot. It refuses a final-component symlink introduced after
+pathname checks, rather than following a substituted CSV between the check and
+the parse. This is not proof of upstream source data licensing.
+
 The "time" field can contain a 10-digit Unix epoch second, a 13-digit epoch
 millisecond, or timezone-aware ISO-8601 timestamp. An ISO time without timezone
 needs a --source-timezone IANA string (e.g. America/New_York). Ambiguous
@@ -81,6 +86,12 @@ not validated against an exchange. The tool rejects rows at or after cutoff.
 
 The audit returns content SHA-256s for data and cutoff file plus parameters
 and an explicit status OFFLINE_UNDERLYING_AUDIT_ONLY. No model is loaded.
+The reader takes one bounded, no-follow descriptor snapshot per input CSV,
+then calculates SHA-256 and parses OHLCV/cutoff rows from **those same bytes**;
+there is no second pathname read that could attach the wrong digest to a
+changed dataset. This is evidence consistency, not source licensing or a
+claim that concurrent same-user modification of the underlying file cannot
+occur during a read.
 
 ## Then: optional actual Kronos evaluation
 

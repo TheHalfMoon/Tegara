@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
+from io import BytesIO, TextIOWrapper
+import os
 from pathlib import Path
+import stat
 from typing import Any
 from zoneinfo import ZoneInfo
 import csv
@@ -52,10 +55,22 @@ class ResearchParameters:
 
 def _load_strict_csv(path: str | Path, header: tuple[str, ...]) -> tuple[list[dict], str]:
     p = Path(path)
-    if p.is_symlink() or not p.is_file() or p.stat().st_size > MAX_BYTES:
+    if p.is_symlink() or not p.is_file():
         raise ValueError("CSV must be an existing non-symlink file <=32 MiB")
-    digest = sha256(p.read_bytes()).hexdigest()
-    with p.open("r", newline="", encoding="utf-8-sig") as file:
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError("no-follow CSV opening unavailable")
+    # Read one bounded descriptor snapshot; parse and hash IDENTICAL bytes.
+    # Never hash by pathname and then reopen a different file for parsing.
+    fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW
+                 | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise ValueError("CSV must be a regular file")
+        raw = source.read(MAX_BYTES + 1)
+    if len(raw) > MAX_BYTES:
+        raise ValueError("CSV exceeds 32 MiB")
+    digest = sha256(raw).hexdigest()
+    with TextIOWrapper(BytesIO(raw), encoding="utf-8-sig", newline="") as file:
         reader = csv.DictReader(file, strict=True)
         if tuple(reader.fieldnames or ()) != header:
             raise ValueError(f"CSV must have exact header: {','.join(header)}")
