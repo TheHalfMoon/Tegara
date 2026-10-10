@@ -213,3 +213,13 @@ independent vendor license verification, a guaranteed options fill or
 real-world profitability. All runs remain offline and do not touch Derayah.
 
 See docs/OFFLINE_REPLAY_CLI.md for commands, input format and limitations.
+
+## Delayed quote execution sensitivity (LT-P01)
+
+The default --execution-mode delayed option quote replay simulates
+positive entry/exit latency and demands later quote evidence rather than
+reusing the target-trigger Bid as its sell fill. The legacy optimistic
+--execution-mode instant-reference requires explicit selection. Missing timely
+depth or quotes abstain; a triggered target can still have negative hypothetical
+PnL at a later lower Bid. See docs/LATENCY_REPLAY.md. This never places
+or confirms a Derayah order and does not verify licensed OPRA data.

@@ -74,6 +74,7 @@ class OfflineReplayCLITests(unittest.TestCase):
         self.assertEqual(out["outcome"], "UNQUALIFIED_DATA")
         self.assertIsNone(out["hypothetical_net_pnl_usd"])
         self.assertFalse(out["hypothetical_pnl_requested"])
+        self.assertEqual(out["parameters"]["execution_mode"], "delayed")
         self.assertFalse(out["broker_execution_verified"])
         self.assertFalse(out["phone_notification_sent"])
         self.assertFalse(out["source_provenance_independently_verified"])
@@ -87,7 +88,9 @@ class OfflineReplayCLITests(unittest.TestCase):
                          sha256(self.csv.read_bytes()).hexdigest())
 
     def test_explicit_hypothetical_replay_models_ask_bid_fees(self):
-        result = self.run_cmd("--allow-hypothetical-pnl")
+        # Old zero-latency reference is intentionally never the default.
+        result = self.run_cmd("--allow-hypothetical-pnl",
+                              "--execution-mode", "instant-reference")
         self.assertEqual(result.returncode, 0, result.stderr)
         out = json.loads(result.stdout)
         self.assertEqual(out["outcome"], "TARGET_EXIT")
@@ -97,6 +100,31 @@ class OfflineReplayCLITests(unittest.TestCase):
         self.assertTrue(out["hypothetical_pnl_requested"])
         self.assertEqual(out["status"], "RESEARCH_ONLY_NOT_LIVE_TRADING")
         self.assertFalse(out["options_profitability_validated"])
+
+    def test_delayed_mode_is_default_with_research_optin(self):
+        # A CSV only containing T0 and T+180s quotes cannot create a
+        # plausible 1-second delayed executable trade at T0.
+        p = self.run_cmd("--allow-hypothetical-pnl")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)
+        self.assertEqual(out["parameters"]["execution_mode"], "delayed")
+        self.assertEqual(out["outcome"], "NO_EXIT_EVIDENCE")
+        self.assertIsNone(out["hypothetical_net_pnl_usd"])
+
+    def test_delayed_default_price_crash_after_trigger_is_loss(self):
+        self.rows = [
+            self.row(seconds=0, bid="1.18", ask="1.20"),
+            self.row(seconds=1, bid="1.19", ask="1.25"),
+            self.row(seconds=2, bid="1.65", ask="1.69"),
+            self.row(seconds=3, bid="0.80", ask="0.85"),
+        ]
+        self.write()
+        p = self.run_cmd("--allow-hypothetical-pnl")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = json.loads(p.stdout)
+        self.assertEqual(out["parameters"]["execution_mode"], "delayed")
+        self.assertEqual(out["outcome"], "TARGET_EXIT")
+        self.assertEqual(out["hypothetical_net_pnl_usd"], "-49.58")
 
     def test_explicit_flag_does_not_upgrade_indicative_feed(self):
         self.rows[1]["feed_type"] = "INDICATIVE"
@@ -109,9 +137,12 @@ class OfflineReplayCLITests(unittest.TestCase):
         self.assertEqual(report["input_quality"]["indicative_rows"], 1)
 
     def test_large_gap_abstains_even_when_research_requested(self):
-        self.rows[1]["observed_at"] = (
-            self.t0 + timedelta(minutes=9)
-        ).isoformat()
+        # Ensure an actual post-latency Ask exists so the failure is in
+        # exit evidence rather than accidentally in entry evidence.
+        self.rows = [
+            self.row(seconds=1, bid="1.18", ask="1.20"),
+            self.row(seconds=540, bid="1.62", ask="1.65"),
+        ]
         self.write()
         result = self.run_cmd("--allow-hypothetical-pnl")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -142,6 +173,8 @@ class OfflineReplayCLITests(unittest.TestCase):
         self.assertIn("earlier than", result.stderr)
 
     def test_missing_ask_liquidity_abstains(self):
+        # The first eligible *post-delay* quote has no ask depth.
+        self.rows = [self.row(seconds=1, bid="1.18", ask="1.20")]
         self.rows[0]["ask_size"] = "0"
         self.write()
         result = self.run_cmd("--allow-hypothetical-pnl")
@@ -207,6 +240,67 @@ class OfflineReplayCLITests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("non-symlink", result.stderr)
+
+    def test_delayed_cli_uses_later_bid_not_trigger_bid(self):
+        self.rows = [
+            self.row(seconds=0, bid="1.18", ask="1.20"),
+            self.row(seconds=1, bid="1.19", ask="1.25"),
+            self.row(seconds=2, bid="1.65", ask="1.69"),
+            self.row(seconds=3, bid="0.80", ask="0.85"),
+        ]
+        self.write()
+        p = self.run_cmd("--allow-hypothetical-pnl",
+                         "--execution-mode", "delayed")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual(r["outcome"], "TARGET_EXIT")
+        self.assertEqual(r["entry_premium"], "1.25")
+        self.assertEqual(r["exit_premium"], "0.80")
+        self.assertEqual(r["hypothetical_net_pnl_usd"], "-49.58")
+        self.assertEqual(r["decision_trigger_at"], (
+            self.t0 + timedelta(seconds=2)).isoformat())
+        self.assertFalse(r["broker_execution_verified"])
+
+    def test_delayed_cli_missing_post_trigger_bid_abstains(self):
+        self.rows = [
+            self.row(seconds=1, bid="1.18", ask="1.20"),
+            self.row(seconds=2, bid="1.65", ask="1.69"),
+        ]
+        self.write()
+        p = self.run_cmd("--allow-hypothetical-pnl",
+                         "--execution-mode", "delayed")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual(r["outcome"], "NO_EXIT_EVIDENCE")
+        self.assertIsNone(r["hypothetical_net_pnl_usd"])
+
+    def test_delayed_cli_default_abstains_without_optin(self):
+        p = self.run_cmd("--execution-mode", "delayed")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        r = json.loads(p.stdout)
+        self.assertEqual(r["outcome"], "UNQUALIFIED_DATA")
+        self.assertIsNone(r["hypothetical_net_pnl_usd"])
+
+    def test_delayed_cli_rejects_zero_and_excessive_delay(self):
+        for field in ("--entry-latency-seconds", "--exit-latency-seconds"):
+            for amount in ("0", "-1", "301"):
+                with self.subTest(field=field, amount=amount):
+                    p = self.run_cmd("--allow-hypothetical-pnl",
+                                     "--execution-mode", "delayed",
+                                     field, amount)
+                    self.assertEqual(p.returncode, 2)
+
+    def test_late_first_quote_relative_to_delay_abstains(self):
+        self.rows = [
+            self.row(seconds=120, bid="1.18", ask="1.20"),
+        ]
+        self.write()
+        p = self.run_cmd("--allow-hypothetical-pnl",
+                         "--execution-mode", "delayed",
+                         "--entry-latency-seconds", "1",
+                         change={"--max-gap-seconds": "5"})
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(json.loads(p.stdout)["outcome"], "NO_ENTRY_EVIDENCE")
 
     def test_tool_does_not_write_or_modify_source(self):
         before = self.csv.read_bytes()

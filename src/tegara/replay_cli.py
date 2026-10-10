@@ -14,6 +14,7 @@ import json
 import sys
 
 from .core import OptionContract
+from .latency_replay import DelayedReplay, delayed_long_option
 from .quote_import import read_option_csv
 from .quote_replay import ReplayOutcome, ReplayResult, ReplayRules, replay_long_option
 
@@ -70,6 +71,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--last-trading-at", required=True,
                    help="Contract-specific cutoff; user-provided, NOT venue verified")
     p.add_argument("--max-gap-seconds", required=True, type=int)
+    p.add_argument("--execution-mode", choices=("instant-reference", "delayed"),
+                   default="delayed",
+                   help="Delayed (default) uses later quote; instant-reference is optimistic and opt-in")
+    p.add_argument("--entry-latency-seconds", type=int, default=1)
+    p.add_argument("--exit-latency-seconds", type=int, default=1)
     p.add_argument("--allow-hypothetical-pnl", action="store_true",
                    help="Explicitly request research P&L; NOT source/license certification")
     return p
@@ -82,6 +88,10 @@ def evaluate(args: argparse.Namespace) -> dict:
     )
     if type(args.max_gap_seconds) is not int or not 1 <= args.max_gap_seconds <= 3600:
         raise ValueError("max-gap-seconds must be between 1 and 3600")
+    for field in ("entry_latency_seconds", "exit_latency_seconds"):
+        value = getattr(args, field)
+        if type(value) is not int or not 1 <= value <= 300:
+            raise ValueError(f"{field} must be an integer from 1 to 300")
     deadline = aware_time(args.deadline)
     cutoff = aware_time(args.last_trading_at)
     entry_not_before = aware_time(args.entry_not_before)
@@ -115,7 +125,14 @@ def evaluate(args: argparse.Namespace) -> dict:
         tick for tick in ticks if tick.quote.observed_at >= entry_not_before
     ]
     first = available[0] if available else None
-    if first is None or (
+    if args.execution_mode == "delayed":
+        result = delayed_long_option(
+            ticks, rules, entry_decision_at=entry_not_before,
+            entry_latency=timedelta(seconds=args.entry_latency_seconds),
+            exit_latency=timedelta(seconds=args.exit_latency_seconds),
+            allow_hypothetical=allow_hypothetical,
+        )
+    elif first is None or (
         first.quote.observed_at - entry_not_before > rules.max_quote_gap
     ):
         result = ReplayResult(
@@ -129,10 +146,19 @@ def evaluate(args: argparse.Namespace) -> dict:
     # Abstention due to unapproved data takes precedence even when there
     # were no entry quotes in the requested window.
     if not allow_hypothetical:
-        result = ReplayResult(
-            ReplayOutcome.UNQUALIFIED_DATA,
-            note="Hypothetical monetary replay was not explicitly requested",
+        result = (
+            DelayedReplay(
+                ReplayOutcome.UNQUALIFIED_DATA, entry_not_before,
+                note="Hypothetical monetary replay was not explicitly requested",
+            ) if args.execution_mode == "delayed"
+            else ReplayResult(
+                ReplayOutcome.UNQUALIFIED_DATA,
+                note="Hypothetical monetary replay was not explicitly requested",
+            )
         )
+    is_delayed = args.execution_mode == "delayed"
+    money = (result.hypothetical_net_pnl if is_delayed
+             else result.simulated_net_pnl)
     return {
         "status": STATUS,
         "input_quality": quality.as_dict(),
@@ -155,17 +181,22 @@ def evaluate(args: argparse.Namespace) -> dict:
             "deadline": deadline.isoformat(),
             "last_trading_at_user_supplied": cutoff.isoformat(),
             "max_gap_seconds": args.max_gap_seconds,
+            "execution_mode": args.execution_mode,
+            "entry_latency_seconds": (args.entry_latency_seconds
+                                      if is_delayed else None),
+            "exit_latency_seconds": (args.exit_latency_seconds
+                                     if is_delayed else None),
         },
         "hypothetical_pnl_requested": allow_hypothetical,
+        "decision_trigger_at": (
+            result.trigger_at.isoformat() if is_delayed and result.trigger_at else None
+        ),
         "outcome": result.outcome.value,
         "entry_at": result.entry_at.isoformat() if result.entry_at else None,
         "exit_at": result.exit_at.isoformat() if result.exit_at else None,
         "entry_premium": str(result.entry_premium) if result.entry_premium is not None else None,
         "exit_premium": str(result.exit_premium) if result.exit_premium is not None else None,
-        "hypothetical_net_pnl_usd": (
-            str(result.simulated_net_pnl)
-            if result.simulated_net_pnl is not None else None
-        ),
+        "hypothetical_net_pnl_usd": str(money) if money is not None else None,
         "outcome_note": result.note,
         "source_provenance_independently_verified": False,
         "data_licensing_independently_verified": False,
@@ -176,7 +207,9 @@ def evaluate(args: argparse.Namespace) -> dict:
         "warning": (
             "Hypothetical quotes only: source/feed labels and a manual cutoff "
             "do not prove OPRA licensing, NBBO validity, actual order fills, "
-            "broker commissions, or ability to exit at the simulated price."
+            "broker commissions, or ability to exit at the simulated price. "
+            "Instant-reference replays use same-event hypothetical triggers; "
+            "delayed replays still do not prove queue priority or execution."
         ),
     }
 
