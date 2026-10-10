@@ -216,9 +216,10 @@ See docs/OFFLINE_REPLAY_CLI.md for commands, input format and limitations.
 
 ## Delayed quote execution sensitivity (LT-P01)
 
-A separate opt-in --execution-mode delayed option quote replay simulates
+The default --execution-mode delayed option quote replay simulates
 positive entry/exit latency and demands later quote evidence rather than
-reusing the target-trigger Bid as its sell fill. Missing timely depth or
-quotes abstain; a triggered target can still have negative hypothetical
+reusing the target-trigger Bid as its sell fill. The legacy optimistic
+--execution-mode instant-reference requires explicit selection. Missing timely
+depth or quotes abstain; a triggered target can still have negative hypothetical
 PnL at a later lower Bid. See docs/LATENCY_REPLAY.md. This never places
 or confirms a Derayah order and does not verify licensed OPRA data.

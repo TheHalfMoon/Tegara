@@ -72,8 +72,8 @@ def parser() -> argparse.ArgumentParser:
                    help="Contract-specific cutoff; user-provided, NOT venue verified")
     p.add_argument("--max-gap-seconds", required=True, type=int)
     p.add_argument("--execution-mode", choices=("instant-reference", "delayed"),
-                   default="instant-reference",
-                   help="Instant=optimistic research reference; delayed=models later quote")
+                   default="delayed",
+                   help="Delayed (default) uses later quote; instant-reference is optimistic and opt-in")
     p.add_argument("--entry-latency-seconds", type=int, default=1)
     p.add_argument("--exit-latency-seconds", type=int, default=1)
     p.add_argument("--allow-hypothetical-pnl", action="store_true",

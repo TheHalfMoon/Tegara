@@ -8,9 +8,11 @@ Prices can move during decision latency, transmission and quote updates.
 
 ## Two modes
 
-The existing replay CLI retains the instant-reference mode for historical
-comparison. It is optimistic and uses same-quote hypothetical decisions.
-It is NOT proof of executable prices.
+The CLI now DEFAULTS to delayed mode for any explicitly requested
+hypothetical PnL. The old optimistic instant-reference mode is available
+ONLY with --execution-mode instant-reference, as an explicitly selected
+counterfactual with same-quote hypothetical exit decisions. That
+optimistic reference is NOT proof of executable prices.
 
 Delayed mode takes an explicit entry decision time, positive entry/exit
 delays, and only uses later option quotes:

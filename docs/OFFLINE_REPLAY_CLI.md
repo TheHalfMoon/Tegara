@@ -95,15 +95,15 @@ authorization. No subscription or paid service was added.
 
 ## Delayed execution sensitivity mode (LT-P01)
 
-The CLI also supports --execution-mode delayed with positive explicit
+The CLI DEFAULTS to --execution-mode delayed with positive explicit
 --entry-latency-seconds and --exit-latency-seconds (both 1..300). A later
 quote than the entry decision is required for simulated Ask purchase,
 and a still later quote than the target/stop trigger is required for
 simulated Bid sale. The trigger quote is NEVER reused as its fill.
 See docs/LATENCY_REPLAY.md for examples and limitations.
 
-The default instant-reference model is maintained ONLY to compare an
-optimistic same-observation hypothetical with delayed-price scenarios.
-It does not establish actual executable prices. Do not interpret a
+The legacy --execution-mode instant-reference requires explicit selection
+to compare an optimistic same-observation hypothetical with delayed-price
+scenarios. It does not establish executable prices. Do not interpret a
 delayed TARGET_EXIT trigger as a guaranteed positive profit: execution
 can happen at a worse Bid, including a loss.
