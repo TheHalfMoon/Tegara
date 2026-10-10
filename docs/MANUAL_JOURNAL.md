@@ -61,3 +61,12 @@ No credentials or brokerage account numbers are needed or stored. Do not store s
 ## Remaining qualifications
 
 GitHub exact-head tests and independent Alibaba OpenCodeReview remain merge gates. A read-only PStack engineering playbook was consulted; independent multi-model reviewers were NOT available and no PStack multi-review result is claimed. Real Derayah statement qualification and 0DTE live quote source proof remain unresolved.
+
+## Decimal resource bounds
+
+Local journal amounts reject finite but extreme scientific-notation
+representations that could overflow the standard Decimal arithmetic
+context (for example 1e999999999 and 1e-999999999). Accepted values
+are bounded to 28 digits of precision, an exponent between -18 and +12,
+and amount at most 1e12. The journal still contains user-declared,
+UNVERIFIED trades and does not attest a broker order or statement.

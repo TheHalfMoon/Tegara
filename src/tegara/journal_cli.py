@@ -13,7 +13,7 @@ from pathlib import Path
 import sqlite3
 import sys
 
-from .core import LongOptionPosition, OptionContract
+from .core import LongOptionPosition, OptionContract, _money
 from .position_store import PositionStore
 
 
@@ -22,9 +22,7 @@ def decimal_value(raw: str) -> Decimal:
         value = Decimal(raw)
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("invalid decimal amount") from exc
-    if not value.is_finite() or value < 0:
-        raise ValueError("amount must be finite and nonnegative")
-    return value
+    return _money(value, "journal amount")
 
 
 def parsed_time(raw: str) -> datetime:

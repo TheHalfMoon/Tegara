@@ -13,7 +13,7 @@ from decimal import Decimal, InvalidOperation
 import json
 import sys
 
-from .core import OptionContract
+from .core import OptionContract, _money
 from .latency_replay import DelayedReplay, delayed_long_option
 from .latency_sensitivity import latency_sensitivity, parse_latency_axis
 from .quote_import import read_option_csv
@@ -27,8 +27,7 @@ def decimal_amount(value: str) -> Decimal:
         result = Decimal(value)
     except (ValueError, InvalidOperation) as exc:
         raise ValueError("amount must be a valid Decimal") from exc
-    if not result.is_finite() or result < 0:
-        raise ValueError("amount must be finite and nonnegative")
+    _money(result, "research amount")
     if result > Decimal("1000000000"):
         raise ValueError("amount exceeds supported research bound")
     return result

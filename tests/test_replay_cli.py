@@ -202,6 +202,16 @@ class OfflineReplayCLITests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2)
                 self.assertFalse(result.stdout)
 
+    def test_extreme_finite_cli_decimal_rejected_without_traceback(self):
+        for value in ("1e999999999", "1e-999999999",
+                      "0e999999999", "1e-19"):
+            with self.subTest(value=value):
+                r = self.run_cmd(change={"--entry-fee": value})
+                self.assertEqual(r.returncode, 2)
+                self.assertIn("bounded", r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse(r.stdout)
+
     def test_max_gap_bound_denied(self):
         for gap in ("0", "-5", "3601"):
             with self.subTest(gap=gap):

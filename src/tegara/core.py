@@ -12,8 +12,19 @@ from zoneinfo import ZoneInfo
 
 
 def _money(value: Decimal, label: str) -> Decimal:
+    """Reject numbers too large or too fine for bounded Decimal arithmetic.
+
+    A value may be *finite* yet have an exponent like 1e999999999, which
+    overflows normal Decimal contexts during replay or accounting.
+    """
     if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
         raise ValueError(f"{label} must be a finite, nonnegative Decimal")
+    representation = value.as_tuple()
+    if (not isinstance(representation.exponent, int)
+            or not -18 <= representation.exponent <= 12
+            or len(representation.digits) > 28
+            or value > Decimal("1000000000000")):
+        raise ValueError(f"{label} exceeds bounded precision or amount")
     return value
 
 
@@ -35,8 +46,8 @@ class OptionContract:
             raise ValueError("strike must be positive")
         if not isinstance(self.expiration, date) or isinstance(self.expiration, datetime):
             raise ValueError("expiration must be a date")
-        if type(self.multiplier) is not int or self.multiplier <= 0:
-            raise ValueError("multiplier must be a positive integer")
+        if type(self.multiplier) is not int or not 1 <= self.multiplier <= 1000000:
+            raise ValueError("multiplier must be a positive integer <= 1000000")
 
 
 @dataclass(frozen=True)
@@ -49,8 +60,8 @@ class LongOptionPosition:
 
     def __post_init__(self) -> None:
         _money(self.entry_price, "entry_price")
-        if type(self.quantity) is not int or self.quantity <= 0:
-            raise ValueError("quantity must be a positive integer")
+        if type(self.quantity) is not int or not 1 <= self.quantity <= 1000000:
+            raise ValueError("quantity must be a positive integer <= 1000000")
         _money(self.entry_fee_per_contract, "entry_fee_per_contract")
         _money(self.exit_fee_per_contract, "exit_fee_per_contract")
 

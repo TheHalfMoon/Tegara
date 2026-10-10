@@ -128,6 +128,19 @@ class OfflineQuoteCSVTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "invalid quote"):
                     self.read()
 
+    def test_extreme_finite_bid_and_ask_exponents_rejected_cleanly(self):
+        for value in ("1e999999999", "1e-999999999",
+                      "0e999999999", "1e-19",
+                      "1.23456789012345678901234567890"):
+            for field in ("bid", "ask"):
+                with self.subTest(value=value, field=field):
+                    row = self.row(**{field: value})
+                    if field == "bid":
+                        row["ask"] = value
+                    self.write([row])
+                    with self.assertRaisesRegex(ValueError, "invalid quote"):
+                        self.read()
+
     def test_broken_size_and_feed_rejected(self):
         for values in ({"bid_size": "-1"}, {"ask_size": "1.0"},
                        {"feed_type": "REALTIME"}, {"bid_size": "NaN"}):

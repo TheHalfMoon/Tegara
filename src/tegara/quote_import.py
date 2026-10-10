@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import csv
 import json
 
-from .core import OptionContract, OptionQuote
+from .core import OptionContract, OptionQuote, _money
 from .quote_replay import ReplayTick
 
 FIELDS = (
@@ -62,9 +62,7 @@ def _decimal(value: str, name: str) -> Decimal:
         number = Decimal(value)
     except InvalidOperation as exc:
         raise ValueError(f"{name} must be a decimal") from exc
-    if not number.is_finite() or number < 0:
-        raise ValueError(f"{name} must be nonnegative and finite")
-    return number
+    return _money(number, name)
 
 
 def _size(value: str, name: str) -> int:

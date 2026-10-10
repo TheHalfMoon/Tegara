@@ -79,6 +79,21 @@ class TargetCoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 calculate_net_exit_pnl(self.position, bad)
 
+    def test_extreme_finite_decimal_exponents_fail_closed(self):
+        for bad in (D("1e999999999"), D("1e-999999999"),
+                    D("0e999999999"), D("1e-19"),
+                    D("1.23456789012345678901234567890"),
+                    D("1000000000001")):
+            with self.subTest(bad=str(bad)):
+                with self.assertRaisesRegex(ValueError, "bounded"):
+                    calculate_net_exit_pnl(self.position, bad)
+
+    def test_oversized_quantity_and_multiplier_rejected(self):
+        with self.assertRaisesRegex(ValueError, "1000000"):
+            replace(self.position, quantity=1000001)
+        with self.assertRaisesRegex(ValueError, "1000000"):
+            replace(self.contract, multiplier=1000001)
+
     def test_zero_or_fractional_quantity_rejected(self):
         for quantity in (0, -1, 1.0, True):
             with self.assertRaises(ValueError):

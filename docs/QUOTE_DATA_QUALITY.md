@@ -66,3 +66,20 @@ automatically imply rights to archive and reuse licensed market data.
 
 No external vendor is contacted, no Derayah account is accessed,
 and no real Bid-based sell notification is triggered by this importer.
+
+## Extreme Decimal Input Handling
+
+All user-provided Decimal amounts pass a finite, nonnegative and bounded
+representation gate before option quote arithmetic. It rejects finite but
+pathological values like 1e999999999 and 1e-999999999 (and extreme
+zero exponent representations) that could overflow the normal Decimal
+context during spread or P&L calculations. The common gate limits amount
+to 1e12, exponent to [-18, +12] and significant-digit count to 28.
+The replay CLI additionally limits input research amounts to 1e9.
+The research domain rejects option contract multipliers and position
+quantities above 1,000,000. These conservative bounds are application
+resource and precision safeguards, NOT exchange lot/tick standards.
+
+Invalid input must fail closed with a validation error, without silently
+producing a price, journal record, alert or brokerage order. The tests use
+synthetic intentionally adversarial CSV values; they are not real OPRA data.

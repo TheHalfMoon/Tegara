@@ -118,3 +118,14 @@ cannot be mixed into a grid. A grid is NOT one trade: scalar P&L is null.
 Unobserved scenarios remain null rather than being filled with zero.
 The grid never chooses an optimal latency based on retrospective results.
 See docs/LATENCY_SENSITIVITY.md for examples and qualification limits.
+
+## Numeric resource bounds
+
+The money/quote validator rejects finite but extreme exponents or
+excessive precision before performing spread and options P&L arithmetic.
+Default Decimal context overflow must not become a traceback or a
+fabricated monetary result. The shared gate permits at most 28 significant
+digits, exponent -18 to +12 and magnitude at most 1e12; the replay CLI
+uses a stricter amount cap of 1e9. Quantities and multipliers are also
+bounded. Limits are local engineering safeguards, not an exchange
+tick-size rule or an OPRA certification.
