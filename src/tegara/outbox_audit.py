@@ -18,6 +18,11 @@ MAX_AUDIT_ROWS = 10_000
 MAX_DB_BYTES = 32 * 1024 * 1024
 KNOWN_STATES = {
     "PENDING", "CLAIMED", "ACCEPTED_BY_PROVIDER", "PROVIDER_ACCEPTED_TOO_LATE",
+    "INVALIDATED_BY_FILL", "INVALIDATED_PRICE_REVERSAL",
+    "INVALIDATED_LIQUIDITY", "INVALIDATED_FEED_DEGRADED",
+    "INVALIDATED_FEED_STALE", "INVALIDATED_CUTOFF_UNKNOWN",
+    "INVALIDATED_AFTER_CUTOFF", "INVALIDATED_TRADING_DATE",
+    "INVALIDATED_TARGET_CHANGE", "INVALIDATED_STALE",
 }
 
 
@@ -37,51 +42,65 @@ def _safe_existing_db(path: str | Path) -> Path:
     if not isinstance(path, (str, Path)) or str(path) in ("", ":memory:"):
         raise ValueError("an existing on-disk SQLite database is required")
     raw = Path(path).expanduser().absolute()
-    # Resolve ONLY the parent (macOS aliases /var -> /private/var).
-    # Do not resolve the final component: O_NOFOLLOW must see any symlink
-    # swapped into place between this metadata check and atomic os.open.
-    try:
-        p = raw.parent.resolve(strict=True) / raw.name
-        st = p.lstat()
-    except OSError as exc:
-        raise ValueError("SQLite audit database is unavailable") from exc
-    if stat.S_ISLNK(st.st_mode):
+    if raw.is_symlink():
         raise ValueError("SQLite audit database file symlinks are refused")
-    if not stat.S_ISREG(st.st_mode):
-        raise ValueError("SQLite audit requires an existing regular database file")
-    if st.st_size > MAX_DB_BYTES:
-        raise ValueError("SQLite audit database exceeds read-only safety budget")
-    return p
-
+    # macOS system aliases /var and /tmp to /private/var and /private/tmp.
+    # Accept only these exact OS aliases; arbitrary intermediate symlinks
+    # must be rejected by the O_NOFOLLOW directory-fd walk below.
+    if len(raw.parts) > 1 and raw.parts[1] in ("var", "tmp"):
+        alias = raw.parts[1]
+        canonical = Path("/private") / alias
+        if Path("/" + alias).is_symlink() and Path("/" + alias).resolve() == canonical:
+            raw = canonical.joinpath(*raw.parts[2:])
+    if ".." in raw.parts or len(raw.parts) < 2:
+        raise ValueError("SQLite audit path must have bounded canonical components")
+    return raw
 
 
 def _offline_snapshot_bytes(path: str | Path) -> bytes:
-    """Read a single bounded O_NOFOLLOW file descriptor, never reopen by path.
+    """Bind parent + leaf + sidecars to one chain of no-follow dir descriptors.
 
-    This requires a quiescent main SQLite file: any WAL, SHM or journal
-    sidecar means the main file might lack committed changes and is denied.
+    Use a quiescent SQLite main file; WAL, SHM and rollback journals mean
+    the main file may omit committed history, so refuse partial snapshots.
     """
     p = _safe_existing_db(path)
-    if not hasattr(os, "O_NOFOLLOW"):
-        raise ValueError("atomic no-follow SQLite audit is unavailable")
-    for suffix in ("-wal", "-journal", "-shm"):
-        if Path(str(p) + suffix).exists():
-            raise ValueError("SQLite sidecar exists; use a quiescent offline DB")
-    fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW)
-    with os.fdopen(fd, "rb") as source:
-        st = os.fstat(source.fileno())
-        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_DB_BYTES:
-            raise ValueError("SQLite snapshot requires a bounded regular file")
-        data = source.read(MAX_DB_BYTES + 1)
-        updated = os.fstat(source.fileno())
-        if (len(data) != st.st_size or len(data) > MAX_DB_BYTES or
-                (updated.st_dev, updated.st_ino, updated.st_size, updated.st_mtime_ns)
-                != (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)):
-            raise ValueError("SQLite input changed during offline snapshot")
-    for suffix in ("-wal", "-journal", "-shm"):
-        if Path(str(p) + suffix).exists():
-            raise ValueError("SQLite sidecar appeared during snapshot")
-    return data
+    if not all(hasattr(os, name) for name in ("O_NOFOLLOW", "O_DIRECTORY")):
+        raise ValueError("atomic no-follow directory audit is unavailable")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_fd = os.open("/", directory_flags)
+    try:
+        for component in p.parts[1:-1]:
+            next_fd = os.open(component, directory_flags, dir_fd=directory_fd)
+            os.close(directory_fd)
+            directory_fd = next_fd
+
+        def reject_sidecars() -> None:
+            for suffix in ("-wal", "-journal", "-shm"):
+                try:
+                    os.stat(p.name + suffix, dir_fd=directory_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                raise ValueError("SQLite sidecar exists; use quiescent offline DB")
+
+        reject_sidecars()
+        try:
+            fd = os.open(p.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+        except FileNotFoundError as exc:
+            raise ValueError("SQLite audit database is unavailable") from exc
+        with os.fdopen(fd, "rb") as source:
+            st = os.fstat(source.fileno())
+            if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_DB_BYTES:
+                raise ValueError("SQLite snapshot requires a bounded regular file")
+            data = source.read(MAX_DB_BYTES + 1)
+            updated = os.fstat(source.fileno())
+            if (len(data) != st.st_size or len(data) > MAX_DB_BYTES or
+                    (updated.st_dev, updated.st_ino, updated.st_size, updated.st_mtime_ns)
+                    != (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)):
+                raise ValueError("SQLite input changed during offline snapshot")
+        reject_sidecars()
+        return data
+    finally:
+        os.close(directory_fd)
 
 
 def _check_schema(conn: sqlite3.Connection) -> None:
@@ -165,9 +184,7 @@ def read_outbox_audit(
         clock = now.astimezone(timezone.utc)
         for row in rows:
             status = row["state"]
-            if not isinstance(status, str) or (
-                status not in KNOWN_STATES and not status.startswith("INVALIDATED_")
-            ):
+            if not isinstance(status, str) or status not in KNOWN_STATES:
                 raise ValueError("unknown outbox state; cannot qualify audit")
             counts[status] += 1
             # Invalidation can overwrite state='CLAIMED' after a newer
@@ -213,6 +230,10 @@ def read_outbox_audit(
                 expected = 1 if status == "ACCEPTED_BY_PROVIDER" else 0
                 if row["ack_timely"] != expected:
                     raise ValueError("provider state contradicts ACK timeliness")
+            if status.startswith("INVALIDATED_") and (
+                row["ack_notice"] is not None and row["ack_timely"] != 0
+            ):
+                raise ValueError("invalidated notice contradicts ACK timeliness")
         conn.rollback()
     unack = unconfirmed
     return {

@@ -202,10 +202,11 @@ class ReadOnlyOutboxAuditTests(unittest.TestCase):
         other = Path(self.tmp.name) / "original.sqlite"
         native_open = os.open
 
-        def replace_with_symlink(path, flags):
-            self.path.rename(other)
-            self.path.symlink_to(other)
-            return native_open(path, flags)
+        def replace_with_symlink(path, flags, **kwargs):
+            if path == "positions.sqlite" and not other.exists():
+                self.path.rename(other)
+                self.path.symlink_to(other)
+            return native_open(path, flags, **kwargs)
 
         with patch("tegara.outbox_audit.os.open", side_effect=replace_with_symlink):
             with self.assertRaises(OSError):
@@ -246,20 +247,63 @@ class ReadOnlyOutboxAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contradicts"):
             self.audit(seconds=2)
 
-    def test_symlink_swap_between_metadata_and_open_is_rejected(self):
-        other = Path(self.tmp.name) / "moved.sqlite"
-        native_lstat = Path.lstat
+    def test_intermediate_symlink_directory_is_rejected(self):
+        alias = Path(self.tmp.name) / "alias"
+        alias.symlink_to(self.tmp.name, target_is_directory=True)
+        with self.assertRaises(OSError):
+            read_outbox_audit(alias / "positions.sqlite", now=self.t)
 
-        def swap_after_lstat(path):
-            info = native_lstat(path)
-            if path.name == "positions.sqlite" and not other.exists():
-                self.path.rename(other)
-                self.path.symlink_to(other)
-            return info
+    def test_substituted_intermediate_directory_symlink_is_rejected(self):
+        intermediate = Path(self.tmp.name) / "middle"
+        intermediate.mkdir()
+        file = intermediate / "copied.sqlite"
+        file.write_bytes(self.path.read_bytes())
+        source_open = os.open
+        moved = Path(self.tmp.name) / "moved-middle"
 
-        with patch.object(Path, "lstat", autospec=True, side_effect=swap_after_lstat):
+        def swap_during_dir_walk(path, flags, **kwargs):
+            if path == "middle" and not moved.exists():
+                intermediate.rename(moved)
+                intermediate.symlink_to(moved, target_is_directory=True)
+            return source_open(path, flags, **kwargs)
+
+        with patch("tegara.outbox_audit.os.open", side_effect=swap_during_dir_walk):
             with self.assertRaises(OSError):
-                self.audit()
+                read_outbox_audit(file, now=self.t)
+
+    def test_invalidated_ack_timely_true_is_rejected(self):
+        notice = self.queue()
+        claim = self.store.revalidation_candidates(
+            "position-secret", now=self.t, max_quote_age=timedelta(seconds=3),
+            last_trading_at=self.cutoff,
+        )[0]
+        self.store.on_quote(
+            "position-secret",
+            OptionQuote(self.c, D("1.21"), D("1.25"), 4,
+                        self.t + timedelta(seconds=1),
+                        "synthetic", "EXACT_NBBO"),
+            self.t + timedelta(seconds=1), timedelta(seconds=3), D("35"),
+            last_trading_at=self.cutoff,
+        )
+        self.store.record_provider_acceptance(
+            notice, claim_token=claim["claim_token"],
+            accepted_at=self.t + timedelta(seconds=1),
+            max_quote_age=timedelta(seconds=3), last_trading_at=self.cutoff,
+            provider_accepted=True, provider_receipt_id="later-ack",
+        )
+        self.store.db.execute(
+            "UPDATE provider_ack_events SET considered_timely=1"
+        )
+        with self.assertRaisesRegex(ValueError, "invalidated"):
+            self.audit(seconds=2)
+
+    def test_unrecognized_invalidated_prefix_never_looks_clean(self):
+        self.queue()
+        self.store.db.execute(
+            "UPDATE outbox SET state='INVALIDATED_BOGUS'"
+        )
+        with self.assertRaisesRegex(ValueError, "unknown outbox"):
+            self.audit()
 
     def test_cli_strict_nonzero_unacknowledged_and_no_mutation(self):
         self.queue()

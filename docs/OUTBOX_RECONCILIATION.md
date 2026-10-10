@@ -52,8 +52,10 @@ unconfirmed claim. Uncertain sends must never be automatically redelivered.
 
 - The database file must already exist, be regular and not itself a
   symlink. macOS system directory aliases are canonicalized.
-- The parent path is canonicalized without resolving the final filename;
-  that final component is opened atomically with O_NOFOLLOW on macOS, its bounded bytes are loaded into an IN-MEMORY
+- All intermediate path components and the final SQLite filename are
+  opened with directory descriptors and O_NOFOLLOW on macOS. Only exact
+  /var and /tmp system aliases are normalized to /private/var and
+  /private/tmp before traversal, its bounded bytes are loaded into an IN-MEMORY
   SQLite database and query_only is enabled. No ledger file is opened
   for SQLite writes or silently switched to a symlink during access.
 - Active WAL, SHM and rollback-journal sidecars are refused because
@@ -61,8 +63,9 @@ unconfirmed claim. Uncertain sends must never be automatically redelivered.
   only a QUIESCENT offline database, not during ongoing writes.
 - Unknown states, missing immutable policy, absent primary/foreign keys,
   malformed provider ACK timestamps or digests, future-dated claim
-  timestamps, provider-accepted states lacking ACK events, and
-  contradictory provider ACK timeliness fail closed.
+  timestamps, provider-accepted states lacking ACK events, unknown
+  invalidation states, and contradictory ACK timeliness (including
+  invalidated notices marked timely) fail closed.
 - Max 10,000 outbox rows and 32 MiB on-disk main database; no truncated
   audit passes. Large databases must be handled by an independently
   qualified, resource-bounded read-only workflow, not silently truncated.
