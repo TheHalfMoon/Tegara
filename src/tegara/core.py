@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
+import re
 from zoneinfo import ZoneInfo
 
 
@@ -37,8 +38,13 @@ class OptionContract:
     multiplier: int = 100
 
     def __post_init__(self) -> None:
-        if not self.symbol or self.symbol != self.symbol.upper() or not self.symbol.replace(".", "").isalnum():
-            raise ValueError("symbol must be a canonical uppercase ticker")
+        # Unicode lookalikes can pass str.isalnum()/str.isupper() and create
+        # visually deceptive contract identifiers. Only accept a bounded
+        # US-market-oriented ASCII root (e.g. SPY, BRK.B, adjusted SPY1).
+        if (not isinstance(self.symbol, str) or len(self.symbol) > 16
+                or re.fullmatch(r"[A-Z0-9]+(?:\.[A-Z0-9]+)*", self.symbol,
+                                flags=re.ASCII) is None):
+            raise ValueError("symbol must be a bounded canonical ASCII uppercase ticker")
         if self.right not in ("C", "P"):
             raise ValueError("right must be C or P")
         _money(self.strike, "strike")

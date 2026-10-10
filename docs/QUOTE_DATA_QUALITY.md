@@ -83,3 +83,15 @@ resource and precision safeguards, NOT exchange lot/tick standards.
 Invalid input must fail closed with a validation error, without silently
 producing a price, journal record, alert or brokerage order. The tests use
 synthetic intentionally adversarial CSV values; they are not real OPRA data.
+
+## ASCII contract identity guard
+
+The market symbol/root must consist of 1..16 ASCII uppercase characters
+(A-Z, 0-9, and internally separating dots), e.g. SPY, QQQ, SPY1,
+or BRK.B. Unicode lookalikes such as full-width characters, Cyrillic
+letters that resemble Latin ticker characters, invisible whitespace, or
+long roots are rejected BEFORE any contract-specific target, replay, or
+local journal operation. This guards accidental identity confusion and
+visual spoofing, not vendor-backed OCC symbology authentication.
+Actual adjusted option deliverables and OCC contract class validity
+still require independent vendor/clearing data.

@@ -128,6 +128,19 @@ class TargetCoreTests(unittest.TestCase):
         )
         self.assertEqual(result.status, AlertStatus.SUPPRESSED_WRONG_TRADING_DATE)
 
+    def test_contract_root_ascii_canonical_rejects_unicode_lookalikes(self):
+        for symbol in ("ＳＰＹ", "ЅPY", "SРY", "ЅＰＹ", "SPY📈",
+                       "S P Y", "spy", "SPY..A", "SPY-", "A" * 17):
+            with self.subTest(symbol=symbol):
+                with self.assertRaisesRegex(ValueError, "ASCII"):
+                    replace(self.contract, symbol=symbol)
+
+    def test_realistic_ascii_dotted_and_adjusted_roots_allowed(self):
+        for symbol in ("SPY", "QQQ", "BRK.B", "SPY1", "A.B2"):
+            with self.subTest(symbol=symbol):
+                self.assertEqual(replace(self.contract, symbol=symbol).symbol,
+                                 symbol)
+
     def test_zero_multiplier_rejected(self):
         with self.assertRaises(ValueError):
             replace(self.contract, multiplier=0)

@@ -234,3 +234,11 @@ Missing fill evidence stays null and suppresses aggregate hypothetical
 min/max; the top-level result never pretends to be a single executed fill.
 The usual unverified OPRA, data-rights, phone and broker caveats apply.
 See docs/LATENCY_SENSITIVITY.md.
+
+## Contract symbol spoofing guard
+
+Option symbols must be canonical ASCII uppercase roots (bounded length;
+dotted and adjusted forms supported). Full-width and Cyrillic lookalike
+characters fail closed before calculations or user-declared recording.
+This is not OCC contract symbology or real quote provenance verification.
+See docs/QUOTE_DATA_QUALITY.md.
