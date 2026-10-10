@@ -1,0 +1,62 @@
+//@version=6
+indicator("Tegara — Underlying ORB + VWAP Research", overlay = true, max_labels_count = 500)
+
+// RESEARCH-ONLY: This tracks the underlying price, NOT the option premium.
+// No broker orders, option-Bid target, or prediction of profitability.
+//
+// Use on U.S. equity 1m/5m intraday charts. No future-looking security calls.
+// Always validate signals with executable option prices and fees elsewhere.
+float minRVOL = input.float(1.25, "Minimum relative volume", minval = 0.1, step = 0.05)
+bool showMAs = input.bool(false, "Show 9/21 EMAs")
+bool showORB = input.bool(true, "Show opening range")
+string tz = "America/New_York"
+bool validTimeframe = timeframe.isintraday and timeframe.in_seconds(timeframe.period) <= 300
+bool inRTH = not na(time(timeframe.period, "0930-1600:23456", tz))
+bool inORB = not na(time(timeframe.period, "0930-0945:23456", tz))
+bool canEnter = not na(time(timeframe.period, "0945-1530:23456", tz))
+bool changedDay = year(time, tz) != year(time[1], tz) or month(time, tz) != month(time[1], tz) or dayofmonth(time, tz) != dayofmonth(time[1], tz)
+bool newSession = inRTH and (not inRTH[1] or changedDay)
+
+var float orbHigh = na
+var float orbLow = na
+var float volumePV = 0.0
+var float volumeCum = 0.0
+
+if newSession
+    orbHigh := na
+    orbLow := na
+    volumePV := 0.0
+    volumeCum := 0.0
+
+if inRTH
+    volumePV += hlc3 * volume
+    volumeCum += volume
+    if inORB
+        orbHigh := na(orbHigh) ? high : math.max(orbHigh, high)
+        orbLow := na(orbLow) ? low : math.min(orbLow, low)
+
+float sessionVWAP = inRTH and volumeCum > 0 ? volumePV / volumeCum : na
+float emaFast = ta.ema(close, 9)
+float emaSlow = ta.ema(close, 21)
+float avgVol = ta.sma(volume, 20)
+float relVolume = not na(avgVol) and avgVol > 0 ? volume / avgVol : na
+
+// Calculate crossovers every bar (not conditionally), to keep historical behavior stable.
+bool crossesAbove = ta.crossover(close, orbHigh)
+bool crossesBelow = ta.crossunder(close, orbLow)
+bool ready = validTimeframe and inRTH and canEnter and not inORB and not na(sessionVWAP) and not na(relVolume) and not na(orbHigh) and not na(orbLow)
+bool bullishCandidate = ready and barstate.isconfirmed and crossesAbove and close > sessionVWAP and emaFast > emaSlow and relVolume >= minRVOL
+bool bearishCandidate = ready and barstate.isconfirmed and crossesBelow and close < sessionVWAP and emaFast < emaSlow and relVolume >= minRVOL
+
+plot(showORB and inRTH ? orbHigh : na, "15m OR High", color = color.new(color.lime, 25), linewidth = 2)
+plot(showORB and inRTH ? orbLow : na, "15m OR Low", color = color.new(color.red, 25), linewidth = 2)
+plot(sessionVWAP, "RTH VWAP", color = color.new(color.yellow, 0), linewidth = 2)
+plot(showMAs ? emaFast : na, "EMA 9", color = color.new(color.aqua, 30))
+plot(showMAs ? emaSlow : na, "EMA 21", color = color.new(color.orange, 30))
+plotshape(bullishCandidate, title = "Bullish underlying candidate", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.small, text = "BULL")
+plotshape(bearishCandidate, title = "Bearish underlying candidate", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.small, text = "BEAR")
+bgcolor(not validTimeframe ? color.new(color.red, 88) : na, title = "Unsupported timeframe")
+
+// These are TradingView underlying-price alerts, NOT option contract sell signals.
+alertcondition(bullishCandidate, title = "Tegara Bullish Underlying Candidate", message = '{"source":"tegara-pine","event":"UNDERLYING_BULLISH_CANDIDATE","symbol":"{{ticker}}","time":"{{time}}","close":"{{close}}"}')
+alertcondition(bearishCandidate, title = "Tegara Bearish Underlying Candidate", message = '{"source":"tegara-pine","event":"UNDERLYING_BEARISH_CANDIDATE","symbol":"{{ticker}}","time":"{{time}}","close":"{{close}}"}')

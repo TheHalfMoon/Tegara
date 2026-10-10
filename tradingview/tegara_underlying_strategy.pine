@@ -1,0 +1,67 @@
+//@version=6
+strategy("Tegara — Underlying ORB Baseline (NOT Options P&L)",
+    overlay = true, pyramiding = 0, process_orders_on_close = true,
+    initial_capital = 10000, default_qty_type = strategy.fixed,
+    default_qty_value = 1, commission_type = strategy.commission.percent,
+    commission_value = 0)
+
+// IMPORTANT: Strategy Tester P&L is for the UNDERLYING security, not calls or
+// puts. No option premium, Theta, IV, spread or Derayah fees are modeled.
+// This is solely a benchmark for intraday underlying direction.
+float minRVOL = input.float(1.25, "Minimum relative volume", minval = 0.1, step = 0.05)
+string tz = "America/New_York"
+bool supported = timeframe.isintraday and timeframe.in_seconds(timeframe.period) <= 300
+bool inRTH = not na(time(timeframe.period, "0930-1600:23456", tz))
+bool inORB = not na(time(timeframe.period, "0930-0945:23456", tz))
+bool entryWindow = not na(time(timeframe.period, "0945-1530:23456", tz))
+bool flattenWindow = not na(time(timeframe.period, "1550-1600:23456", tz))
+bool changedDay = year(time, tz) != year(time[1], tz) or month(time, tz) != month(time[1], tz) or dayofmonth(time, tz) != dayofmonth(time[1], tz)
+bool newSession = inRTH and (not inRTH[1] or changedDay)
+
+var float orbHigh = na
+var float orbLow = na
+var float runningPV = 0.0
+var float runningVol = 0.0
+
+if newSession
+    orbHigh := na
+    orbLow := na
+    runningPV := 0.0
+    runningVol := 0.0
+
+if inRTH
+    runningPV += hlc3 * volume
+    runningVol += volume
+    if inORB
+        orbHigh := na(orbHigh) ? high : math.max(high, orbHigh)
+        orbLow := na(orbLow) ? low : math.min(low, orbLow)
+
+float rthVwap = inRTH and runningVol > 0 ? runningPV / runningVol : na
+float ema9 = ta.ema(close, 9)
+float ema21 = ta.ema(close, 21)
+float avgVolume = ta.sma(volume, 20)
+float rvol = not na(avgVolume) and avgVolume > 0 ? volume / avgVolume : na
+bool crossesHigh = ta.crossover(close, orbHigh)
+bool crossesLow = ta.crossunder(close, orbLow)
+bool ready = supported and inRTH and entryWindow and not inORB and not na(orbHigh) and not na(orbLow) and not na(rthVwap) and not na(rvol)
+bool longSignal = ready and barstate.isconfirmed and crossesHigh and close > rthVwap and ema9 > ema21 and rvol >= minRVOL
+bool shortSignal = ready and barstate.isconfirmed and crossesLow and close < rthVwap and ema9 < ema21 and rvol >= minRVOL
+
+if longSignal and strategy.position_size == 0
+    strategy.entry("L", strategy.long, comment = "Underlying bullish research")
+if shortSignal and strategy.position_size == 0
+    strategy.entry("S", strategy.short, comment = "Underlying bearish research")
+
+// Underlying-only protective reference levels. These DO NOT act as an option stop.
+if strategy.position_size > 0 and not na(orbLow)
+    strategy.exit("LX", "L", stop = orbLow)
+if strategy.position_size < 0 and not na(orbHigh)
+    strategy.exit("SX", "S", stop = orbHigh)
+
+if strategy.position_size != 0 and (flattenWindow or not inRTH or not supported)
+    strategy.close_all(comment = "Underlying baseline session exit")
+
+plot(inRTH ? orbHigh : na, "OR High", color = color.new(color.green, 20))
+plot(inRTH ? orbLow : na, "OR Low", color = color.new(color.red, 20))
+plot(rthVwap, "RTH VWAP", color = color.yellow)
+bgcolor(not supported ? color.new(color.red, 88) : na)
