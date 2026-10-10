@@ -183,3 +183,11 @@ The position then requires a strictly newer qualified quote before queuing a
 new review alert. A wrong-contract or older quote cannot cancel a newer
 one. This is still a local synthetic research ledger without real OPRA proof.
 See docs/FEED_DEGRADATION_SAFETY.md.
+
+## Additional static security checks (SEC-P01)
+
+Draft PRs also run a separate CodeQL matrix for Python and
+JavaScript/TypeScript (security-extended rules). A successful CodeQL scan
+does NOT replace the mandatory independent Alibaba OpenCodeReview,
+real-world market-data qualification, or options execution testing.
+See docs/CODEQL_SECURITY.md.
