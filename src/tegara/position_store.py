@@ -18,7 +18,8 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from .core import (
-    AlertStatus, LongOptionPosition, OptionContract, OptionQuote, assess_profit_target
+    AlertStatus, LongOptionPosition, OptionContract, OptionQuote,
+    _money, assess_profit_target,
 )
 
 
@@ -29,9 +30,8 @@ def stamp(t: datetime) -> str:
 
 
 def money(value: Decimal) -> Decimal:
-    if not isinstance(value, Decimal) or not value.is_finite() or value < 0:
-        raise ValueError("amount must be a finite nonnegative Decimal")
-    return value
+    """Apply the same bounded Decimal trust boundary as the option engine."""
+    return _money(value, "position store amount")
 
 
 class PositionStatus(str, Enum):

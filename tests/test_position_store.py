@@ -290,6 +290,23 @@ class PositionStoreTests(unittest.TestCase):
                     self.store.confirm_manual_close("entry-1", "bad", self.contract,
                                                     1, price, D("2"), self.now)
 
+    def test_extreme_finite_fill_price_and_fee_fail_before_mutation(self):
+        initial = self.store.get("entry-1")
+        for amount in (D("1e999999999"), D("1e-999999999"),
+                       D("0e999999999"), D("1e-19")):
+            for field in ("fill_price", "fee_per_contract"):
+                with self.subTest(amount=str(amount), field=field):
+                    values = {"fill_price": D("1.25"), "fee_per_contract": D("2")}
+                    values[field] = amount
+                    with self.assertRaisesRegex(ValueError, "bounded"):
+                        self.store.confirm_manual_close(
+                            "entry-1", "bad-extreme", self.contract, 1,
+                            values["fill_price"], values["fee_per_contract"], self.now)
+                    self.assertEqual(
+                        self.store.get("entry-1").open_quantity, initial.open_quantity
+                    )
+                    self.assertEqual(self.store.pending("entry-1"), [])
+
     def test_opened_after_fill_denied(self):
         with self.assertRaises(ValueError):
             self.store.confirm_manual_close("entry-1", "early", self.contract, 1,
