@@ -309,10 +309,20 @@ class PositionStore:
                             "WHERE position_id=? AND state IN ('PENDING','CLAIMED')",
                             (invalidation_states[result.status], key),
                         )
-                        self.db.execute(
-                            "UPDATE monitor SET armed=1,last_quote_at=? "
-                            "WHERE position_id=?", (observed, key),
-                        )
+                        if result.status is AlertStatus.SUPPRESSED_INSUFFICIENT_SIZE:
+                            # Only a current, otherwise eligible NBBO-labeled
+                            # depth failure can advance the quote watermark.
+                            # Unqualified/stale/future-dated feeds must not
+                            # control the ordering of later valid observations.
+                            self.db.execute(
+                                "UPDATE monitor SET armed=1,last_quote_at=? "
+                                "WHERE position_id=?", (observed, key),
+                            )
+                        else:
+                            self.db.execute(
+                                "UPDATE monitor SET armed=1 WHERE position_id=?",
+                                (key,),
+                            )
                 return MonitorResult(errors[result.status])
             observed = stamp(quote.observed_at)
             state = self.db.execute("SELECT * FROM monitor WHERE position_id=?", (key,)).fetchone()

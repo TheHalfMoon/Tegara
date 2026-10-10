@@ -27,8 +27,12 @@ strictly newer than the monitor's previous observation:
 - WRONG_TRADING_DATE -> INVALIDATED_TRADING_DATE
 
 The transaction invalidates PENDING and CLAIMED notices and sets the monitor
-to armed for the next strictly newer quote. It records the invalidating
-timestamp to prevent replay of already-observed messages.
+to armed for the next strictly newer **qualified** quote. A currently
+valid NBBO-labeled insufficient-depth quote advances the timestamp watermark;
+unqualified, delayed or cutoff-invalid messages DO NOT advance the watermark,
+because their metadata cannot be trusted. This prevents malicious future
+timestamps in an indicative feed from blocking recovery. The last previously
+accepted watermark still prevents replay of older quotes.
 
 A *different contract* or an older same-contract message does not invalidate
 an otherwise current alert. Previous provider ACK events remain auditable

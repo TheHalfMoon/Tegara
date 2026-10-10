@@ -81,10 +81,13 @@ class PositionStoreTests(unittest.TestCase):
                 "SELECT state FROM outbox WHERE id=?", (original.notification_id,)
             ).fetchone()["state"], "INVALIDATED_FEED_DEGRADED"
         )
+        # An eligible quote at the same time as the invalid indicative
+        # observation is valid because the invalid observation cannot claim
+        # ownership of the accepted-quote watermark.
         self.assertEqual(self.check(self.quote(offset=1), offset=1).decision,
-                         MonitorDecision.OUT_OF_ORDER)
-        self.assertEqual(self.check(self.quote(offset=2), offset=2).decision,
                          MonitorDecision.ALERT_QUEUED)
+        self.assertEqual(self.check(self.quote(offset=2), offset=2).decision,
+                         MonitorDecision.ALREADY_NOTIFIED)
 
     def test_degraded_feed_cancels_already_claimed_notice(self):
         a = self.check(self.quote())
@@ -125,6 +128,43 @@ class PositionStoreTests(unittest.TestCase):
         self.assertEqual(
             [r["id"] for r in self.store.pending("entry-1")],
             [a.notification_id],
+        )
+
+    def test_bad_feed_future_timestamp_cannot_poison_quote_watermark(self):
+        prior = self.check(self.quote())
+        bogus_future = self.quote(
+            offset=3600, bid="99", feed="INDICATIVE"
+        )
+        self.assertEqual(
+            self.check(bogus_future, offset=1).decision,
+            MonitorDecision.UNQUALIFIED_FEED,
+        )
+        self.assertEqual(self.store.pending("entry-1"), [])
+        # Last genuinely accepted market observation was T0. The fake
+        # future timestamp must NOT block T0+2s real eligible recovery.
+        state = self.store.db.execute(
+            "SELECT last_quote_at FROM monitor WHERE position_id='entry-1'"
+        ).fetchone()
+        self.assertEqual(state["last_quote_at"], self.now.isoformat(
+            timespec="microseconds"
+        ))
+        recovered = self.check(self.quote(offset=2), offset=2)
+        self.assertEqual(recovered.decision, MonitorDecision.ALERT_QUEUED)
+        self.assertNotEqual(recovered.notification_id, prior.notification_id)
+
+    def test_unknown_cutoff_future_quote_does_not_poison_watermark(self):
+        self.check(self.quote())
+        bad = self.quote(offset=3600)
+        self.assertEqual(
+            self.store.on_quote(
+                "entry-1", bad, self.now + timedelta(seconds=1),
+                timedelta(seconds=3), D("105"), last_trading_at=None
+            ).decision,
+            MonitorDecision.CUTOFF_UNVERIFIED,
+        )
+        self.assertEqual(
+            self.check(self.quote(offset=2), offset=2).decision,
+            MonitorDecision.ALERT_QUEUED
         )
 
     def test_newer_transport_stale_quote_invalidates_previous_alert(self):
