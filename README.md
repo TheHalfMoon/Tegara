@@ -143,3 +143,33 @@ TradingView documents manual chart CSV export at:
 https://www.tradingview.com/support/solutions/43000537255-how-to-export-chart-data/
 Only chart data actually loaded is exported; this is not an OPRA options
 quote feed. Retention rights and actual timestamp semantics require review.
+
+## Local macOS Notification Center research demo (LM-P01)
+
+No live option data feed or phone push is connected. You can preview a
+hypothetical option Bid target notice or explicitly send ONE manually entered,
+clearly labeled *research demo* notification to the Mac's Notification Center.
+The delivery response only means macOS accepted the local process request,
+not that a user saw a message or a Derayah options order was filled.
+
+Instructions and opt-in CLI switches: docs/LOCAL_MAC_NOTIFICATIONS.md.
+
+## Synthetic options-target end-to-end regression (SJ-P01)
+
+A zero-network integration test runs an unverified options quote CSV through
+the contract data validator, SQLite target crossing, one-time notification
+claim, simulated provider acceptance, and separately entered manual fill.
+This test never sends a phone/OS notification or places broker orders.
+It also checks unverified feeds and missing session cutoffs fail closed.
+
+See docs/SYNTHETIC_JOURNEY.md for exactly what this evidence does/not prove.
+
+## US option market data and broker integration gates
+
+Read docs/MARKET_DATA_QUALIFICATION.md before selecting a data provider.
+Existing TradingView Premium and Derayah Global access DO NOT independently
+establish exportable live OPRA feed rights. In particular TradingView's
+broker-entitlement verification table currently lists Derayah for TADAWUL,
+not OPRA. The optional Cboe quote-interval product is a licensed market
+data purchase, not a free live price stream. Do not buy any additional
+subscription or enable execution without a separate explicit authorization.
