@@ -147,6 +147,11 @@ def replay_long_option(
             # become an instantaneous hypothetical option sell/stop fill.
             break
         if q.bid_size < rules.quantity or q.bid <= rules.exit_slippage_per_share:
+            # A newer quote with no executable depth invalidates any earlier
+            # candidate for a discretionary *time* exit. It cannot justify
+            # retroactively selling on an older Bid after depth disappeared.
+            # An explicit earlier target/stop trigger has already returned.
+            last_eligible_exit = None
             continue
         exit_price = q.bid - rules.exit_slippage_per_share
         pnl = calculate_net_exit_pnl(position, exit_price)
