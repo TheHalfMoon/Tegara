@@ -196,6 +196,39 @@ class KronosBridgeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             score_forecast(f, {t: D("NaN") for t in f.prediction_times})
 
+    def test_tiny_positive_ohlc_cannot_underflow_into_zero_model_input(self):
+        # Decimal accepts all these finite positives; the extreme cases
+        # convert to float zero, while 1e-19 violates our precision budget.
+        # None may silently reach the model as invalid/unsupported OHLC.
+        for tiny in (D("1e-1000"), D("1e-999999999"), D("1e-19")):
+            with self.subTest(tiny=str(tiny)):
+                with self.assertRaisesRegex(ValueError, "bounded"):
+                    replace(
+                        self.bars[0], open=tiny, low=tiny, close=tiny,
+                    )
+        self.assertEqual(float(D("1e-1000")), 0.0)
+
+    def test_tiny_positive_forecast_values_do_not_inflate_mae(self):
+        f = forecast_underlying(StubPredictor(), self.window(horizon=2))
+        actual = {t: D("100.4") for t in f.prediction_times}
+        for field in ("predicted_closes", "baseline_closes", "reference_close"):
+            with self.subTest(field=field):
+                bad = (
+                    D("1e-1000") if field == "reference_close"
+                    else (D("1e-1000"), D("100.5"))
+                )
+                with self.assertRaisesRegex(ValueError, "bounded"):
+                    score_forecast(replace(f, **{field: bad}), actual)
+
+    def test_noncanonical_zero_and_long_precision_are_refused(self):
+        # Even zero-valued volume must not carry unbounded exponent digits.
+        with self.assertRaisesRegex(ValueError, "bounded"):
+            replace(self.bars[0], volume=D("0e-999999999"))
+        with self.assertRaisesRegex(ValueError, "bounded"):
+            replace(self.bars[0], open=D("1." + "0" * 30))
+        # Ordinary bounded research prices remain accepted.
+        self.assertEqual(replace(self.bars[0], volume=D("0.0000")).volume, D(0))
+
     def test_absurd_input_price_rejected(self):
         with self.assertRaisesRegex(ValueError, "exceeds"):
             replace(self.bars[0], high=D("1e50"))
