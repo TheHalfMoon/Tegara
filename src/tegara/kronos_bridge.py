@@ -178,11 +178,36 @@ def score_forecast(
 
     This must be invoked only AFTER the future observed bars are complete.
     """
-    expected = set(forecast.prediction_times)
+    # UnderlyingForecast is a public frozen dataclass: callers can construct
+    # one directly without forecast_underlying() validating its horizon.
+    # Never silently truncate a misaligned model/baseline array with zip(),
+    # or count a duplicated future timestamp as an independent observation.
+    horizon = forecast.prediction_times
+    if (
+        not 1 <= len(horizon) <= 60
+        or len(forecast.predicted_closes) != len(horizon)
+        or len(forecast.baseline_closes) != len(horizon)
+    ):
+        raise ValueError("forecast arrays must match a bounded nonempty horizon")
+    previous = None
+    for ts in horizon:
+        if (not isinstance(ts, datetime) or ts.tzinfo is None
+                or ts.utcoffset() is None):
+            raise ValueError("forecast horizon timestamps must be timezone aware")
+        if previous is not None and ts <= previous:
+            raise ValueError("forecast horizon timestamps must strictly increase")
+        previous = ts
+    nonnegative_decimal(forecast.reference_close, "reference close", positive=True)
+    for model_value, baseline_value in zip(
+        forecast.predicted_closes, forecast.baseline_closes
+    ):
+        nonnegative_decimal(model_value, "predicted close", positive=True)
+        nonnegative_decimal(baseline_value, "baseline close", positive=True)
+    expected = set(horizon)
     if set(actual_closes) != expected or len(actual_closes) != len(expected):
         raise ValueError("actual outcome timestamps must match forecast horizon exactly")
     actual = []
-    for ts in forecast.prediction_times:
+    for ts in horizon:
         actual.append(nonnegative_decimal(actual_closes[ts], "actual close", positive=True))
     n = Decimal(len(actual))
     model_mae = sum(

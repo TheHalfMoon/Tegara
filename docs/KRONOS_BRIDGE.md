@@ -34,8 +34,13 @@ before running inference. Respect upstream license and data rights.
 - Produces a naive persistence baseline alongside model predictions. The
   simple baseline is essential: a complex model is not assumed superior.
 - score_forecast: after-event underlying close MAE, persistence-baseline MAE,
-  and terminal direction classification. These are NOT probabilities of
-  option profit or evidence of executable orders.
+  and terminal direction classification. A directly constructed public
+  UnderlyingForecast must have one unique, strictly increasing, timezone-aware
+  timestamp per predicted and persistence-baseline close; list lengths must
+  agree and all prices must be finite and strictly positive. Duplicate future
+  timestamps cannot inflate sample size or count the same actual bar twice;
+  malformed arrays never get truncated silently by zip(). These are NOT
+  probabilities of option profit or evidence of executable orders.
 
 The user-supplied last-trading/session cutoff does NOT verify its source.
 A live system still requires independently qualified exchange/broker metadata.
