@@ -22,7 +22,13 @@ before running inference. Respect upstream license and data rights.
 
 ## Design and inputs
 
-- MarketBar: strictly finite OHLC/volume values and timezone-aware timestamp.
+- MarketBar: strictly finite, bounded OHLC/volume values and timezone-aware
+  timestamp. Decimal exponent (-18..15) and significant representation length
+  (28 digits) are bounded before conversion to float-backed pandas/model
+  arrays; a finite positive price such as 1E-1000 must not silently become
+  an impossible zero OHLC input. Directly supplied forecast/actual scoring
+  values obey the same numeric bounds. Limits are research-data input guards,
+  not venue tick-size certification.
 - create_window: 32..512 contiguous past 1m or 5m bars from the SAME NY
   trading date, no duplicate/reordered bars or unknown session cutoff.
 - Forecast horizon: max 60 bars and never crossing the explicit user-supplied

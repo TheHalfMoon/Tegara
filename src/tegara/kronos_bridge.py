@@ -21,7 +21,15 @@ def nonnegative_decimal(value: Decimal, name: str, *, positive: bool = False) ->
         raise ValueError(f"{name} must be finite nonnegative Decimal")
     if positive and value == 0:
         raise ValueError(f"{name} must be strictly positive")
-    if value > Decimal("1e15"):
+    # These values feed float-backed pandas/Kronos arrays. A finite positive
+    # Decimal can still underflow to 0.0 (e.g. 1E-1000) at conversion, silently
+    # fabricating a zero close/price. Cap exponents and precision before that
+    # conversion; keep bounds independent of the active Decimal context.
+    parts = value.as_tuple()
+    if (not isinstance(parts.exponent, int)
+            or not -18 <= parts.exponent <= 15
+            or len(parts.digits) > 28
+            or value > Decimal("1e15")):
         raise ValueError(f"{name} exceeds practical bounded input")
     return value
 
