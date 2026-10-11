@@ -41,9 +41,13 @@ relative O_DIRECTORY/O_NOFOLLOW opens, then opens the CSV leaf with
 O_NOFOLLOW. Missing atomic no-follow support fails closed instead of
 falling back to a pathname-following read. Only macOS's fixed /var and
 /tmp aliases to /private are normalized. Tests refuse parent-directory
-symlinks and last-moment symlink substitution. The snapshot remains
-research-only and cannot attest licensed market-data provenance or
-prevent malicious modification by the same user of an already-open file.
+symlinks and last-moment symlink substitution. The shared bounded
+snapshot also compares descriptor identity, size, mtime and ctime before
+and after the read: detectable in-place concurrent writes fail closed
+instead of producing a quote-quality digest for a moving source.
+These are metadata-based checks, not exclusive locking or protection
+from a same-UID attacker able to evade timestamp/change detection.
+The snapshot remains research-only; no quote content certifies data rights.
 
 ## Report fields
 
