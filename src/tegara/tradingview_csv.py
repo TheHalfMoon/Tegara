@@ -101,29 +101,60 @@ def convert_tradingview(
 
 
 def write_converted(path: str | Path, rows: list[dict[str, str]]) -> None:
-    dst = Path(path)
+    """Publish complete CSV without following symlinked output directories."""
+    import os
+    import secrets
+
+    dst = Path(path).expanduser()
+    if ".." in dst.parts or not dst.name:
+        raise ValueError("destination cannot traverse parent components")
+    dst = dst.absolute()
     if dst.is_symlink() or dst.exists():
         raise ValueError("destination must not already exist or be symlink")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    # Stage in the destination directory: a write failure must never expose
-    # a plausible-looking partial research dataset under its final name.
-    import os
-    import tempfile
-    fd, staged = tempfile.mkstemp(
-        dir=dst.parent, prefix=f".{dst.name}.", suffix=".partial"
-    )
+
+    # Only canonicalize macOS's verified built-in aliases /var and /tmp.
+    if len(dst.parts) > 1 and dst.parts[1] in ("var", "tmp"):
+        alias = Path("/") / dst.parts[1]
+        canonical = Path("/private") / dst.parts[1]
+        if alias.is_symlink() and alias.resolve() == canonical:
+            dst = canonical.joinpath(*dst.parts[2:])
+
+    if not getattr(os, "O_DIRECTORY", 0) or not getattr(os, "O_NOFOLLOW", 0):
+        raise ValueError("atomic no-follow output directory opening unavailable")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    parent_fd = os.open("/", directory_flags)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=TARGET_HEADER)
-            writer.writeheader()
-            writer.writerows(rows)
-            f.flush()
-            os.fsync(f.fileno())
-        # link() is atomic and fails if another writer or symlink already
-        # claimed the destination. Unlike replace(), it never overwrites.
-        os.link(staged, dst)
+        for component in dst.parts[1:-1]:
+            try:
+                child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            except FileNotFoundError:
+                # Preserve the historical ability to create absent parents;
+                # each new directory is opened with O_NOFOLLOW before use.
+                os.mkdir(component, mode=0o700, dir_fd=parent_fd)
+                child_fd = os.open(component, directory_flags, dir_fd=parent_fd)
+            os.close(parent_fd)
+            parent_fd = child_fd
+
+        stage_name = f".{dst.name}.{secrets.token_hex(16)}.partial"
+        file_fd = os.open(
+            stage_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600, dir_fd=parent_fd,
+        )
+        try:
+            with os.fdopen(file_fd, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=TARGET_HEADER)
+                writer.writeheader()
+                writer.writerows(rows)
+                f.flush()
+                os.fsync(f.fileno())
+            # Both names are resolved against the *same pinned directory*.
+            # The hard link publishes atomically without overwriting anyone.
+            os.link(stage_name, dst.name, src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd, follow_symlinks=False)
+        finally:
+            os.unlink(stage_name, dir_fd=parent_fd)
     finally:
-        os.unlink(staged)
+        os.close(parent_fd)
 
 
 def main(argv=None) -> int:

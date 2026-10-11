@@ -54,10 +54,16 @@ Example (illustrative CSV with verified bar-open timestamp semantics):
       --interval-minutes 1 --bar-time-is open
 
 The destination must not already exist; it is published with private POSIX
-file permissions. The converter first stages a complete, flushed CSV in the
-same directory, then uses an atomic no-overwrite hard link to publish it.
-Malformed rows, failed writes, or concurrent destination creation cannot leave
-an incomplete CSV at the requested final path or overwrite another file.
+file permissions. The converter pins every output-parent directory using
+descriptor-relative O_DIRECTORY/O_NOFOLLOW checks (creating missing parents
+with private permissions), then stages a complete, flushed CSV in that pinned
+directory and publishes it using an atomic no-overwrite hard link. It refuses
+symlinked parent directories, including a parent swapped immediately before
+opening. Malformed rows, failed writes, or concurrent destination creation
+cannot leave an incomplete CSV at the requested final name or overwrite
+another file. Only verified macOS /var and /tmp aliases are normalized.
+These bounded guarantees do not imply source-data licensing or protect from
+a malicious same-uid writer modifying an already-open destination file.
 No private data files belong in the Git repository.
 
 ## Normalized input format
