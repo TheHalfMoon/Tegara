@@ -227,6 +227,14 @@ def score_forecast(
     ):
         nonnegative_decimal(model_value, "predicted close", positive=True)
         nonnegative_decimal(baseline_value, "baseline close", positive=True)
+        # "Persistence" means the same last-known reference at every
+        # predicted horizon step. A directly forged UnderlyingForecast may
+        # supply a different baseline and manufacture an apparent model
+        # advantage if we score it as though persistence were genuine.
+        if baseline_value != forecast.reference_close:
+            raise ValueError(
+                "persistence baseline must equal the reference close at every horizon"
+            )
     expected = set(horizon)
     if set(actual_closes) != expected or len(actual_closes) != len(expected):
         raise ValueError("actual outcome timestamps must match forecast horizon exactly")

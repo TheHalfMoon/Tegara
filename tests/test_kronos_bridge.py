@@ -279,6 +279,50 @@ class KronosBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reference close"):
             score_forecast(replace(f, reference_close=D("NaN")), actual)
 
+    def test_forged_persistence_baseline_cannot_inflate_model_advantage(self):
+        forecast = forecast_underlying(
+            StubPredictor(), self.window(horizon=2)
+        )
+        actual = {t: D("100.0") for t in forecast.prediction_times}
+        forged = replace(
+            forecast, predicted_closes=(D("100"), D("100")),
+            baseline_closes=(D("500"), D("500")),
+        )
+        # Historically this scored model MAE 0 versus fake baseline MAE 400.
+        with self.assertRaisesRegex(ValueError, "persistence baseline"):
+            score_forecast(forged, actual)
+
+    def test_one_forged_baseline_step_fails_closed(self):
+        forecast = forecast_underlying(
+            StubPredictor(), self.window(horizon=2)
+        )
+        actual = {t: D("100.4") for t in forecast.prediction_times}
+        for changed_idx in range(2):
+            with self.subTest(changed_idx=changed_idx):
+                bogus = list(forecast.baseline_closes)
+                bogus[changed_idx] += D("1")
+                with self.assertRaisesRegex(ValueError, "persistence baseline"):
+                    score_forecast(
+                        replace(forecast, baseline_closes=tuple(bogus)),
+                        actual,
+                    )
+
+    def test_equivalent_decimal_scale_preserves_true_persistence(self):
+        forecast = forecast_underlying(
+            StubPredictor(), self.window(horizon=2)
+        )
+        actual = {t: D("100.4") for t in forecast.prediction_times}
+        normalized = replace(
+            forecast,
+            baseline_closes=tuple(
+                price.quantize(D("0.000")) for price in forecast.baseline_closes
+            ),
+        )
+        self.assertEqual(
+            score_forecast(normalized, actual).persistence_mae,
+            score_forecast(forecast, actual).persistence_mae,
+        )
+
     def test_valid_scoring_still_counts_every_unique_future_bar(self):
         f = forecast_underlying(StubPredictor(), self.window(horizon=2))
         actual = {t: D("100.4") for t in f.prediction_times}
