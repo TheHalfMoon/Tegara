@@ -45,9 +45,26 @@ def read_csv_snapshot(source: str | Path, limit: int) -> bytes:
             dir_fd=parent_fd,
         )
         with os.fdopen(file_fd, "rb") as f:
-            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            before = os.fstat(f.fileno())
+            if not stat.S_ISREG(before.st_mode):
                 raise ValueError("CSV must be an ordinary regular file")
+            if before.st_size > limit:
+                raise ValueError("CSV exceeds bounded local input size")
             raw = f.read(limit + 1)
+            after = os.fstat(f.fileno())
+            # A pathname can remain unchanged while another process writes
+            # through the same inode. Refuse detected in-place mutation, not
+            # merely symlink swaps. This is not an exclusive file lock.
+            before_identity = (
+                before.st_dev, before.st_ino, before.st_size,
+                before.st_mtime_ns, before.st_ctime_ns,
+            )
+            after_identity = (
+                after.st_dev, after.st_ino, after.st_size,
+                after.st_mtime_ns, after.st_ctime_ns,
+            )
+            if len(raw) != before.st_size or before_identity != after_identity:
+                raise ValueError("CSV source changed during offline snapshot")
     finally:
         os.close(parent_fd)
     if len(raw) > limit:
