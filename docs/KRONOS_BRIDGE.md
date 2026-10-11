@@ -48,9 +48,13 @@ before running inference. Respect upstream license and data rights.
   and terminal direction classification. A directly constructed public
   UnderlyingForecast must have one unique, strictly increasing, timezone-aware
   timestamp per predicted and persistence-baseline close; list lengths must
-  agree and all prices must be finite and strictly positive. Duplicate future
-  timestamps cannot inflate sample size or count the same actual bar twice;
-  malformed arrays never get truncated silently by zip(). These are NOT
+  agree and all prices must be finite and strictly positive. The
+  persistence-baseline price must equal the last-known reference close at
+  **every horizon step**, even when the public forecast object is constructed
+  directly; changing its baseline must not manufacture a model advantage.
+  Duplicate future timestamps cannot inflate sample size or count the
+  same actual bar twice; malformed arrays are never silently truncated by
+  zip(). These are NOT
   probabilities of option profit or evidence of executable orders.
 
 The user-supplied last-trading/session cutoff does NOT verify its source.
