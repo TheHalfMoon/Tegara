@@ -129,9 +129,9 @@ class TradingViewCSVTests(unittest.TestCase):
         )
         actual_link = os.link
 
-        def compete(source, target):
+        def compete(source, target, **kwargs):
             self.dest.write_text("other writer's data")
-            return actual_link(source, target)
+            return actual_link(source, target, **kwargs)
 
         with patch("os.link", side_effect=compete):
             with self.assertRaises(FileExistsError):
@@ -141,6 +141,62 @@ class TradingViewCSVTests(unittest.TestCase):
             sorted(p.name for p in self.dest.parent.iterdir()),
             sorted([self.source.name, self.dest.name]),
         )
+
+    def test_output_parent_symlink_is_refused_without_redirecting_write(self):
+        rows = convert_tradingview(
+            self.source, interval_minutes=1, bar_time_is="open"
+        )
+        directory = Path(self.tmp.name) / "actual-dir"
+        directory.mkdir()
+        alias = Path(self.tmp.name) / "alias-dir"
+        alias.symlink_to(directory, target_is_directory=True)
+        with self.assertRaises(OSError):
+            write_converted(alias / "normalized.csv", rows)
+        self.assertFalse((directory / "normalized.csv").exists())
+        self.assertEqual(sorted(p.name for p in directory.iterdir()), [])
+
+    def test_output_parent_swapped_to_symlink_at_open_is_refused(self):
+        rows = convert_tradingview(
+            self.source, interval_minutes=1, bar_time_is="open"
+        )
+        parent = Path(self.tmp.name) / "dest-parent"
+        parent.mkdir()
+        redirected = Path(self.tmp.name) / "other-dir"
+        redirected.mkdir()
+        native_open = os.open
+        switched = []
+
+        def insert_parent_symlink(component, flags, *args, **kwargs):
+            if component == parent.name and not switched:
+                parent.rename(Path(self.tmp.name) / "original-parent")
+                parent.symlink_to(redirected, target_is_directory=True)
+                switched.append(True)
+            return native_open(component, flags, *args, **kwargs)
+
+        with patch("os.open", side_effect=insert_parent_symlink):
+            with self.assertRaises(OSError):
+                write_converted(parent / "normalized.csv", rows)
+        self.assertTrue(switched)
+        self.assertFalse((redirected / "normalized.csv").exists())
+
+    def test_output_creates_private_missing_parent(self):
+        rows = convert_tradingview(
+            self.source, interval_minutes=1, bar_time_is="open"
+        )
+        target = Path(self.tmp.name) / "new-private" / "inner" / "normalized.csv"
+        write_converted(target, rows)
+        self.assertTrue(target.is_file())
+        self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(target.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_output_parent_traversal_fails_closed(self):
+        rows = convert_tradingview(
+            self.source, interval_minutes=1, bar_time_is="open"
+        )
+        suspicious = self.dest.parent / ".." / self.dest.parent.name / self.dest.name
+        with self.assertRaisesRegex(ValueError, "parent components"):
+            write_converted(suspicious, rows)
+        self.assertFalse(self.dest.exists())
 
     def test_output_private_permissions(self):
         rows = convert_tradingview(self.source, interval_minutes=1, bar_time_is="open")
