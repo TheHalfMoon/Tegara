@@ -139,6 +139,60 @@ class KronosBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exceeds"):
             replace(self.bars[0], high=D("1e50"))
 
+    def test_duplicate_forecast_times_cannot_inflate_sample_count(self):
+        f = forecast_underlying(StubPredictor(), self.window(horizon=2))
+        duplicate = replace(
+            f, prediction_times=(f.prediction_times[0],) * 2
+        )
+        # A dict has one actual observation despite the two forecast rows.
+        actual = {f.prediction_times[0]: D("100.4")}
+        with self.assertRaisesRegex(ValueError, "strictly increase"):
+            score_forecast(duplicate, actual)
+
+    def test_forecast_array_length_mismatch_is_not_silently_truncated(self):
+        f = forecast_underlying(StubPredictor(), self.window(horizon=2))
+        actual = {t: D("100.4") for t in f.prediction_times}
+        for field in ("predicted_closes", "baseline_closes"):
+            with self.subTest(field=field):
+                invalid = replace(f, **{field: (D("100.5"),)})
+                with self.assertRaisesRegex(ValueError, "arrays must match"):
+                    score_forecast(invalid, actual)
+
+    def test_unsorted_or_naive_forecast_horizon_is_rejected(self):
+        f = forecast_underlying(StubPredictor(), self.window(horizon=2))
+        actual = {t: D("100.4") for t in f.prediction_times}
+        bad_order = replace(f, prediction_times=tuple(reversed(f.prediction_times)))
+        with self.assertRaisesRegex(ValueError, "strictly increase"):
+            score_forecast(bad_order, actual)
+        naive = replace(
+            f, prediction_times=(
+                f.prediction_times[0].replace(tzinfo=None),
+                f.prediction_times[1],
+            ),
+        )
+        with self.assertRaisesRegex(ValueError, "timezone aware"):
+            score_forecast(naive, actual)
+
+    def test_nonfinite_or_negative_forecast_inputs_never_score(self):
+        f = forecast_underlying(StubPredictor(), self.window(horizon=2))
+        actual = {t: D("100.4") for t in f.prediction_times}
+        for field in ("predicted_closes", "baseline_closes"):
+            for bad in (D("NaN"), D("Infinity"), D("-1"), D("0")):
+                with self.subTest(field=field, bad=str(bad)):
+                    broken = replace(f, **{field: (bad, D("100.5"))})
+                    with self.assertRaisesRegex(ValueError, "close"):
+                        score_forecast(broken, actual)
+        with self.assertRaisesRegex(ValueError, "reference close"):
+            score_forecast(replace(f, reference_close=D("NaN")), actual)
+
+    def test_valid_scoring_still_counts_every_unique_future_bar(self):
+        f = forecast_underlying(StubPredictor(), self.window(horizon=2))
+        actual = {t: D("100.4") for t in f.prediction_times}
+        score = score_forecast(f, actual)
+        self.assertEqual(score.sample_size, 2)
+        self.assertEqual(score.model_mae, D("0.1"))
+        self.assertEqual(score.persistence_mae, D("0.3"))
+
     def test_no_prediction_of_options_profit_from_underlying(self):
         result = forecast_underlying(StubPredictor(), self.window())
         self.assertFalse(result.options_pnl_validated)
