@@ -36,8 +36,13 @@ descriptor snapshot. It pins every parent directory with O_DIRECTORY and
 O_NOFOLLOW, then opens the leaf relative to that directory descriptor.
 Intermediate-directory or final-component symlink substitutions are refused
 (including swaps after pathname checks), not followed into another CSV.
-Platforms lacking atomic no-follow support fail closed. This is not proof of
-upstream source data licensing or protection from same-uid in-place writes.
+Platforms lacking atomic no-follow support fail closed. A descriptor fstat
+before and after the bounded read also refuses detectable same-inode writes
+(changes in size, mtime or ctime), so a concurrent mutation cannot silently
+pass the offline snapshot stability check. This is not a lock: privileged or
+same-uid interference that avoids these metadata checks, or changes after
+the snapshot has completed, may still occur. Neither mechanism proves
+upstream source data licensing.
 
 The "time" field can contain a 10-digit Unix epoch second, a 13-digit epoch
 millisecond, or timezone-aware ISO-8601 timestamp. An ISO time without timezone
@@ -99,10 +104,12 @@ The reader takes one bounded, no-follow descriptor snapshot per input CSV
 after descriptor-relative O_DIRECTORY/O_NOFOLLOW checks on all parent paths,
 then calculates SHA-256 and parses OHLCV/cutoff rows from **those same bytes**;
 there is no second pathname read that could attach the wrong digest to a
-changed dataset. Intermediate symlinked directories are refused. This is
-evidence consistency, not source licensing or a claim that concurrent
-same-user modification of an already-open file cannot
-occur during a read.
+changed dataset. Intermediate symlinked directories are refused. The
+snapshot also detects mutations that change inode size, mtime or ctime while
+its bytes are being read, and fails closed instead of attaching a digest to
+such a read. This is evidence consistency, not source licensing, exclusive
+locking, or an absolute guarantee against same-user manipulation that evades
+filesystem timestamp and metadata checks.
 
 ## Then: optional actual Kronos evaluation
 
