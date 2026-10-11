@@ -147,6 +147,54 @@ class QuoteReplayTests(unittest.TestCase):
         self.assertEqual(r.outcome, ReplayOutcome.TIME_EXIT)
         self.assertEqual(r.simulated_net_pnl, D("8.42"))
 
+    def test_newer_no_bid_depth_cancels_retrospective_time_exit(self):
+        # At minute 8 an executable Bid exists, but a newer quote in the
+        # exit window has no displayed size. The model must not claim a
+        # time exit at minute 8 based on hindsight after the market vanished.
+        observations = [
+            self.tick(0, "1.18", "1.20"),
+            self.tick(4, "1.28"),
+            self.tick(8, "1.37"),
+            self.tick(9, "0.20", bid_size=0),
+        ]
+        r = replay_long_option(
+            observations, self.rules, provenance_approved=True
+        )
+        self.assertEqual(r.outcome, ReplayOutcome.NO_EXIT_EVIDENCE)
+        self.assertIsNone(r.simulated_net_pnl)
+        self.assertIsNone(r.exit_at)
+
+    def test_newer_no_bid_then_fresh_bid_can_restore_time_exit(self):
+        # A newer executable Bid restores the eligible endpoint after
+        # an intervening unavailable quote, without reusing the old Bid.
+        observations = [
+            self.tick(0, "1.18", "1.20"),
+            self.tick(4, "1.28"),
+            self.tick(7, "1.37"),
+            self.tick(8, "0.20", bid_size=0),
+            self.tick(9, "1.31"),
+        ]
+        r = replay_long_option(
+            observations, self.rules, provenance_approved=True
+        )
+        self.assertEqual(r.outcome, ReplayOutcome.TIME_EXIT)
+        self.assertEqual(r.exit_at, self.at + timedelta(minutes=9))
+        self.assertEqual(r.exit_premium, D("1.31"))
+        self.assertEqual(r.simulated_net_pnl, D("6.42"))
+
+    def test_latest_quote_below_exit_slippage_disables_time_exit(self):
+        rules = replace(self.rules, exit_slippage_per_share=D("0.02"))
+        observations = [
+            self.tick(0, "1.18", "1.20"),
+            self.tick(8, "1.32"),
+            self.tick(9, "0.01", ask="0.04"),
+        ]
+        r = replay_long_option(
+            observations, rules, provenance_approved=True
+        )
+        self.assertEqual(r.outcome, ReplayOutcome.NO_EXIT_EVIDENCE)
+        self.assertIsNone(r.simulated_net_pnl)
+
     def test_missing_exit_quotes_give_no_claimed_pnl(self):
         r = replay_long_option([self.tick(0, "1.18", "1.20")],
                                self.rules, provenance_approved=True)

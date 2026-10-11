@@ -13,7 +13,12 @@ The replay uses **Ask + modeled slippage** at entry and **Bid - modeled slippage
 - A wrong contract or non-monotonic timestamp is invalid input.
 - Missing OPRA-quality feed label and absent approval prevent numeric P&L.
 - Insufficient ask size at the first observation prevents entry.
-- Bid size below open quantity prevents a modeled exit.
+- Bid size below open quantity prevents a modeled exit. For a
+  **discretionary TIME_EXIT**, a newer pre-cutoff quote without sufficient
+  Bid size (or whose Bid cannot cover modeled sell slippage) also invalidates
+  the *older* time-exit candidate. A subsequent eligible quote may restore
+  a candidate. The model must not retroactively book a positive exit from a
+  stale earlier Bid when the latest observed pre-cutoff depth disappeared.
 - A gap longer than the configured maximum ends the replay without a claimed exit or P&L.
 - If the last usable quote is too far from the requested exit deadline, the replay returns NO_EXIT_EVIDENCE, not a fabricated closing value.
 - A result that has a simulated P&L is still strictly a synthetic **hypothetical bid/ask fill**, not evidence that a real Limit or Market order would have filled.
