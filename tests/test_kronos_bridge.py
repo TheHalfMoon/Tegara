@@ -69,6 +69,67 @@ class KronosBridgeTests(unittest.TestCase):
         )
         self.assertEqual(len(predictor.call["df"]), 40)
 
+    def test_direct_window_must_not_forecast_historical_bars(self):
+        valid = self.window(horizon=2)
+        forged = replace(
+            valid,
+            prediction_times=(
+                valid.bars[-2].observed_at,
+                valid.bars[-1].observed_at,
+            ),
+        )
+        model = StubPredictor()
+        with self.assertRaisesRegex(ValueError, "strictly future"):
+            forecast_underlying(model, forged)
+        self.assertIsNone(model.call, "model must not see leaked future context")
+
+    def test_direct_window_must_not_cross_cutoff(self):
+        valid = self.window(horizon=2)
+        forged = replace(
+            valid, last_trading_at=valid.bars[-1].observed_at + self.interval
+        )
+        model = StubPredictor()
+        with self.assertRaisesRegex(ValueError, "forecast horizon"):
+            forecast_underlying(model, forged)
+        self.assertIsNone(model.call)
+
+    def test_direct_window_gap_is_rejected_before_predictor(self):
+        valid = self.window(horizon=2)
+        forged = replace(
+            valid,
+            bars=valid.bars[:20] + valid.bars[21:],
+        )
+        model = StubPredictor()
+        with self.assertRaisesRegex(ValueError, "gap/duplicate"):
+            forecast_underlying(model, forged)
+        self.assertIsNone(model.call)
+
+    def test_direct_window_forecast_time_shape_is_required(self):
+        valid = self.window(horizon=2)
+        for bad in (
+            replace(valid, prediction_times=[]),
+            replace(valid, prediction_times=()),
+            replace(valid, prediction_times=valid.prediction_times[::-1]),
+        ):
+            with self.subTest(forecast_times=bad.prediction_times):
+                model = StubPredictor()
+                with self.assertRaises(ValueError):
+                    forecast_underlying(model, bad)
+                self.assertIsNone(model.call)
+
+    def test_direct_window_cannot_bypass_ny_date_rule(self):
+        valid = self.window(horizon=2)
+        forged = replace(
+            valid,
+            bars=(replace(valid.bars[0],
+                          observed_at=valid.bars[0].observed_at - timedelta(days=1)),)
+                 + valid.bars[1:],
+        )
+        model = StubPredictor()
+        with self.assertRaisesRegex(ValueError, "NY trading date"):
+            forecast_underlying(model, forged)
+        self.assertIsNone(model.call)
+
     def test_no_forward_inference_beyond_user_cutoff(self):
         with self.assertRaisesRegex(ValueError, "forecast horizon"):
             self.window(cutoff=self.bars[-1].observed_at + timedelta(minutes=3))

@@ -123,6 +123,22 @@ def forecast_underlying(
         raise ValueError("model_label must not be empty")
     if type(sample_count) is not int or sample_count < 1 or sample_count > 16:
         raise ValueError("sample_count out of supported range")
+    # ForecastWindow is a public dataclass; a direct caller may bypass
+    # create_window() and inject future observations into the model context,
+    # reorder bars, or supply an after-cutoff horizon. Revalidate before
+    # importing pandas or invoking an external predictor.
+    if not isinstance(window, ForecastWindow):
+        raise ValueError("forecast requires a validated ForecastWindow")
+    if not isinstance(window.prediction_times, tuple):
+        raise ValueError("forecast prediction times must be a tuple")
+    validated = create_window(
+        window.bars,
+        horizon_bars=len(window.prediction_times),
+        interval=window.interval,
+        last_trading_at=window.last_trading_at,
+    )
+    if window.prediction_times != validated.prediction_times:
+        raise ValueError("forecast prediction times must be strictly future and aligned")
     try:
         import pandas as pd
     except ImportError as exc:

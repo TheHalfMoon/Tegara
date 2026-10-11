@@ -27,10 +27,15 @@ before running inference. Respect upstream license and data rights.
   trading date, no duplicate/reordered bars or unknown session cutoff.
 - Forecast horizon: max 60 bars and never crossing the explicit user-supplied
   end of tradable session. For abbreviated market days, supply actual cutoff.
-- forecast_underlying: injected KronosPredictor-compatible model. Converts
-  only past market bars to pandas input and requests strictly future timestamps.
-  Rejects malformed output length, timestamp mismatch, nonfinite or invalid
-  predicted closes.
+- forecast_underlying: injected KronosPredictor-compatible model. Before
+  importing pandas or invoking an external predictor, independently
+  revalidates *even caller-constructed ForecastWindow objects* against
+  create_window's complete 32..512 contiguous prior-bar, NY-session,
+  cutoff and exact future-horizon rules. A fabricated window cannot send
+  historical outcome bars or after-cutoff timestamps to a model merely by
+  bypassing the normal factory. Converts only past bars to pandas input
+  and requests strictly future timestamps. Rejects malformed output length,
+  timestamp mismatch, nonfinite or invalid predicted closes.
 - Produces a naive persistence baseline alongside model predictions. The
   simple baseline is essential: a complex model is not assumed superior.
 - score_forecast: after-event underlying close MAE, persistence-baseline MAE,
