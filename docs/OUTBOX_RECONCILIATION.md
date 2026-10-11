@@ -61,6 +61,12 @@ unconfirmed claim. Uncertain sends must never be automatically redelivered.
 - Active WAL, SHM and rollback-journal sidecars are refused because
   an on-disk main-file snapshot might omit committed changes. Audit
   only a QUIESCENT offline database, not during ongoing writes.
+- The read-only main-file snapshot compares inode identity, length, mtime
+  and ctime before and after the read. A same-size concurrent overwrite
+  whose mtime was restored still changes ctime under ordinary filesystem
+  behavior and causes the audit to refuse a stale snapshot. This check
+  is not a lock or a defense against privileged/same-user interference
+  capable of evading filesystem metadata, nor does it make live auditing safe.
 - Unknown states, missing immutable policy, absent primary/foreign keys,
   malformed provider ACK timestamps or digests, future-dated claim
   timestamps, provider-accepted states lacking ACK events, unknown

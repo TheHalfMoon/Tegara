@@ -94,8 +94,10 @@ def _offline_snapshot_bytes(path: str | Path) -> bytes:
             data = source.read(MAX_DB_BYTES + 1)
             updated = os.fstat(source.fileno())
             if (len(data) != st.st_size or len(data) > MAX_DB_BYTES or
-                    (updated.st_dev, updated.st_ino, updated.st_size, updated.st_mtime_ns)
-                    != (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)):
+                    (updated.st_dev, updated.st_ino, updated.st_size,
+                     updated.st_mtime_ns, updated.st_ctime_ns)
+                    != (st.st_dev, st.st_ino, st.st_size,
+                        st.st_mtime_ns, st.st_ctime_ns)):
                 raise ValueError("SQLite input changed during offline snapshot")
         reject_sidecars()
         return data

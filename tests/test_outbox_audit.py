@@ -213,6 +213,58 @@ class ReadOnlyOutboxAuditTests(unittest.TestCase):
                 self.audit()
         self.assertTrue(other.exists())
 
+    def test_same_size_sqlite_write_with_restored_mtime_is_rejected(self):
+        # A hostile same-UID writer is outside the file permission boundary;
+        # the offline audit must nevertheless detect a changed ctime if
+        # mtime is restored after an in-place same-size mutation.
+        import tegara.outbox_audit as audit_module
+
+        source = self.path
+        saved = source.stat()
+        original = source.read_bytes()
+        self.assertIn(b"position-secret", original)
+        real_fdopen = os.fdopen
+        test_case = self
+        was_modified = []
+
+        class MutateAfterRead:
+            def __init__(self, file):
+                self.file = file
+
+            def __enter__(self):
+                self.file.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.file.__exit__(*args)
+
+            def fileno(self):
+                return self.file.fileno()
+
+            def read(self, length):
+                old_snapshot = self.file.read(length)
+                test_case.assertNotIn(b"position-secreu", old_snapshot)
+                with source.open("r+b", buffering=0) as writer:
+                    writer.seek(original.index(b"position-secret"))
+                    writer.write(b"position-secreu")
+                # Restore the exact mtime and size so the previous check
+                # incorrectly accepted the now-stale snapshot.
+                os.utime(source, ns=(saved.st_atime_ns, saved.st_mtime_ns))
+                was_modified.append(True)
+                return old_snapshot
+
+        with patch.object(audit_module.os, "fdopen",
+                          side_effect=lambda fd, *a, **kw: MutateAfterRead(
+                              real_fdopen(fd, *a, **kw))):
+            with self.assertRaisesRegex(ValueError, "changed during offline"):
+                audit_module._offline_snapshot_bytes(source)
+        self.assertEqual(was_modified, [True])
+        actual = source.stat()
+        self.assertEqual(actual.st_size, saved.st_size)
+        self.assertEqual(actual.st_mtime_ns, saved.st_mtime_ns)
+        self.assertNotEqual(actual.st_ctime_ns, saved.st_ctime_ns)
+        self.assertNotEqual(source.read_bytes(), original)
+
     def test_wal_sidecar_requires_offline_quiescent_database(self):
         sidecar = Path(str(self.path.resolve()) + "-wal")
         sidecar.write_bytes(b"")
