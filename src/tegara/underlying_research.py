@@ -37,8 +37,8 @@ class ResearchParameters:
     max_windows: int = 120
 
     def __post_init__(self) -> None:
-        if self.interval_minutes not in (1, 5):
-            raise ValueError("only 1m/5m underlying research is supported")
+        if type(self.interval_minutes) is not int or self.interval_minutes not in (1, 5):
+            raise ValueError("only integer 1m/5m underlying research is supported")
         for name in ("lookback_bars", "horizon_bars", "stride_bars",
                      "holdout_sessions", "max_windows"):
             value = getattr(self, name)
@@ -147,6 +147,13 @@ def walk_forward(
         raise ValueError("cutoff file must cover exactly the dataset's NY dates")
     for day, series in groups.items():
         cutoff = cutoffs[day]
+        # The direct Python API also accepts caller-built cutoff dictionaries;
+        # do not trust that load_cutoffs() has verified every calendar date.
+        # Check *all* dates, not only held-out dates passed to create_window().
+        if (not isinstance(cutoff, datetime) or
+                cutoff.tzinfo is None or cutoff.utcoffset() is None or
+                cutoff.astimezone(NY).date() != day):
+            raise ValueError(f"cutoff for {day} must be timezone aware and on its NY session date")
         interval = timedelta(minutes=params.interval_minutes)
         previous = None
         for bar in series:

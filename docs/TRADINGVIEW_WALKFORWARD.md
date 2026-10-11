@@ -87,7 +87,11 @@ session in the dataset:
 **That value is an example, NOT a verified close for any underlying or option,
 not a shortened trading-day rule, and not a valid 0DTE options last-trade rule.**
 Use actual confirmed session times per symbol/date. A cutoff is user-supplied,
-not validated against an exchange. The tool rejects rows at or after cutoff.
+not validated against an exchange. The tool requires one timezone-aware cutoff
+on its matching New York session date for **every** data session, including
+earlier sessions not selected for forecast scoring; the direct Python API
+enforces the same calendar check as the CSV loader. It rejects bars at or
+after cutoff. Interval minutes must be an integer 1 or 5 (not a Boolean).
 
 ## First: audit and lock the input
 
