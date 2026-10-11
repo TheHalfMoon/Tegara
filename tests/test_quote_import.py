@@ -45,6 +45,55 @@ class OfflineQuoteCSVTests(unittest.TestCase):
         return read_option_csv(self.path, expected_contract=self.contract,
                                expected_quantity=2)
 
+    def _assert_quote_mutation_rejected(self, replacement: bytes):
+        self.write([self.row()])
+        source = self.path
+        native_fdopen = os.fdopen
+
+        class MidReadWriter:
+            def __init__(self, file):
+                self.file = file
+
+            def __enter__(self):
+                self.file.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return self.file.__exit__(*args)
+
+            def fileno(self):
+                return self.file.fileno()
+
+            def read(self, size):
+                initial = self.file.read(size)
+                before = source.stat()
+                source.write_bytes(replacement)
+                os.utime(source, ns=(
+                    before.st_atime_ns, before.st_mtime_ns + 1_000_000_000,
+                ))
+                return initial
+
+        def fdopen_with_concurrent_writer(fd, *args, **kwargs):
+            return MidReadWriter(native_fdopen(fd, *args, **kwargs))
+
+        with patch("tegara._csv_snapshot.os.fdopen",
+                   side_effect=fdopen_with_concurrent_writer):
+            with self.assertRaisesRegex(
+                ValueError, "changed during offline snapshot"
+            ):
+                self.read()
+        self.assertEqual(source.read_bytes(), replacement)
+
+    def test_in_place_quote_price_mutation_during_read_is_rejected(self):
+        self.write([self.row()])
+        raw = self.path.read_bytes()
+        self._assert_quote_mutation_rejected(raw.replace(b"1.20", b"1.30"))
+
+    def test_quote_file_resize_during_read_is_rejected(self):
+        self.write([self.row()])
+        raw = self.path.read_bytes()
+        self._assert_quote_mutation_rejected(raw + b"\n")
+
     def test_good_synthetic_rows_never_certify_live_trading(self):
         self.write([self.row(), self.row(2, bid="1.22", ask="1.30")])
         ticks, result = self.read()
@@ -257,7 +306,7 @@ class OfflineQuoteCSVTests(unittest.TestCase):
                 replaced.append(True)
             return real_open(component, flags, *args, **kwargs)
 
-        with patch("tegara.quote_import.os.open",
+        with patch("tegara._csv_snapshot.os.open",
                    side_effect=swap_before_component_open):
             with self.assertRaises(OSError):
                 read_option_csv(
@@ -278,7 +327,7 @@ class OfflineQuoteCSVTests(unittest.TestCase):
         self.write([self.row()])
         # Simulate a platform exposing no usable O_NOFOLLOW flag. The
         # importer must refuse, never silently fall back to O_RDONLY.
-        with patch("tegara.quote_import.os.O_NOFOLLOW", 0):
+        with patch("tegara._csv_snapshot.os.O_NOFOLLOW", 0):
             with self.assertRaisesRegex(ValueError, "no-follow"):
                 self.read()
 
@@ -295,7 +344,7 @@ class OfflineQuoteCSVTests(unittest.TestCase):
                 self.path.symlink_to(alternate)
             return original_open(path, flags, *args, **kwargs)
 
-        with patch("tegara.quote_import.os.open",
+        with patch("tegara._csv_snapshot.os.open",
                    side_effect=insert_symlink_at_open):
             with self.assertRaises(OSError):
                 self.read()
@@ -309,7 +358,7 @@ class OfflineQuoteCSVTests(unittest.TestCase):
     def test_giant_byte_length_rejected(self):
         with self.path.open("wb") as f:
             f.truncate(48 * 1024 * 1024 + 1)
-        with self.assertRaisesRegex(ValueError, "too large"):
+        with self.assertRaisesRegex(ValueError, "bounded local input size"):
             self.read()
 
 

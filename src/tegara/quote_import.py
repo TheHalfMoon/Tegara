@@ -8,8 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 from io import BytesIO, TextIOWrapper
-import os
-import stat
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -17,6 +15,7 @@ from zoneinfo import ZoneInfo
 import csv
 import json
 
+from ._csv_snapshot import read_csv_snapshot
 from .core import OptionContract, OptionQuote, _money
 from .quote_replay import ReplayTick
 
@@ -91,42 +90,10 @@ def read_option_csv(
             raise ValueError("last_trading_at must be timezone-aware")
         if last_trading_at.astimezone(NY).date() != expected_contract.expiration:
             raise ValueError("last trading cutoff must be on the NY expiration date")
-    path = Path(source).expanduser()
-    if ".." in path.parts:
-        raise ValueError("source path cannot traverse parent components")
-    path = path.absolute()
-    if not path.is_file() or path.is_symlink():
-        raise ValueError("source must be an existing regular non-symlink CSV")
-    # macOS /var and /tmp are built-in symlinks into /private. Only accept
-    # those exact known OS aliases; reject all other intermediate symlinks.
-    if len(path.parts) > 1 and path.parts[1] in ("var", "tmp"):
-        alias = path.parts[1]
-        canonical = Path("/private") / alias
-        if Path("/" + alias).is_symlink() and Path("/" + alias).resolve() == canonical:
-            path = canonical.joinpath(*path.parts[2:])
-    if not getattr(os, "O_NOFOLLOW", 0) or not getattr(os, "O_DIRECTORY", 0):
-        raise ValueError("atomic no-follow CSV directory opening is unavailable")
-    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-    parent_fd = os.open("/", directory_flags)
-    try:
-        for part in path.parts[1:-1]:
-            next_fd = os.open(part, directory_flags, dir_fd=parent_fd)
-            os.close(parent_fd)
-            parent_fd = next_fd
-        # This descriptor-relative walk pins every parent and the leaf,
-        # including any components swapped after the initial path check.
-        file_fd = os.open(
-            path.name, os.O_RDONLY | os.O_NOFOLLOW
-            | getattr(os, "O_NONBLOCK", 0), dir_fd=parent_fd,
-        )
-        with os.fdopen(file_fd, "rb") as source_file:
-            if not stat.S_ISREG(os.fstat(source_file.fileno()).st_mode):
-                raise ValueError("source must be a regular file")
-            raw = source_file.read(MAX_CSV_BYTES + 1)
-    finally:
-        os.close(parent_fd)
-    if len(raw) > MAX_CSV_BYTES:
-        raise ValueError("CSV is too large for local ingestion limit")
+    # Share the stable no-follow source snapshot with OHLCV/TradingView.
+    # Hash and parse only bytes whose underlying descriptor was unchanged
+    # throughout reading, rather than accepting an in-place concurrent write.
+    raw = read_csv_snapshot(source, MAX_CSV_BYTES)
     content_digest = sha256(raw).hexdigest()
     quotes: list[ReplayTick] = []
     previous: datetime | None = None
