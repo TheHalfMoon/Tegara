@@ -257,6 +257,35 @@ class UnderlyingResearchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly"):
             walk_forward(FutureStub(), bars, cutoffs, self.args)
 
+    def test_earlier_session_wrong_day_cutoff_cannot_pass_silently(self):
+        bars, cutoffs, _, _ = self.parsed()
+        first = min(cutoffs)
+        cutoffs[first] += timedelta(days=1)
+        with self.assertRaisesRegex(ValueError, "on its NY session date"):
+            walk_forward(FutureStub(), bars, cutoffs, self.args)
+
+    def test_direct_cutoff_mapping_must_be_aware_on_every_session(self):
+        bars, cutoffs, _, _ = self.parsed()
+        earlier = min(cutoffs)
+        for invalid in (
+            cutoffs[earlier].replace(tzinfo=None),
+            None,
+            cutoffs[earlier] + timedelta(days=1),
+        ):
+            with self.subTest(invalid=invalid):
+                candidate = dict(cutoffs)
+                candidate[earlier] = invalid
+                with self.assertRaisesRegex(ValueError, "cutoff for"):
+                    walk_forward(FutureStub(), bars, candidate, self.args)
+
+    def test_interval_bool_is_not_accepted_as_one_minute(self):
+        for invalid in (True, False, 1.0, "1"):
+            with self.subTest(value=invalid):
+                with self.assertRaisesRegex(ValueError, "integer 1m/5m"):
+                    ResearchParameters(invalid, 32, 3, 7, 1, 12)
+        self.assertEqual(ResearchParameters(1, 32, 3, 7, 1, 12).interval_minutes, 1)
+        self.assertEqual(ResearchParameters(5, 32, 3, 7, 1, 12).interval_minutes, 5)
+
     def test_early_close_rejects_data_after_cutoff(self):
         bars, cutoffs, _, _ = self.parsed()
         cutoffs[date(2026, 10, 9)] = self.sessions[-1] + timedelta(minutes=35)
